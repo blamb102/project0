@@ -1,0 +1,23 @@
+{
+  "lastRun": "2026-05-19T13:04:11.131Z",
+  "meetings": {
+    "RAN1#3g": {
+      "meetingId": "RAN1#3g",
+      "ftpPath": "TSG_RAN/WG1_RL1/https://www.3gpp.org/ftp/TSG_RAN/WG1_RL1/TSGR1_AH",
+      "crawledAt": "2026-05-19T13:01:49.233Z",
+      "tdocCount": 0
+    },
+    "RAN1#99": {
+      "meetingId": "RAN1#99",
+      "ftpPath": "TSG_RAN/WG1_RL1/TSGR1_99",
+      "crawledAt": "2026-05-19T13:04:11.010Z",
+      "tdocCount": 1836
+    },
+    "RAN1#TSGR1_AH": {
+      "meetingId": "RAN1#TSGR1_AH",
+      "ftpPath": "TSG_RAN/WG1_RL1/TSGR1_AH",
+      "crawledAt": "2026-05-19T13:04:11.131Z",
+      "tdocCount": 0
+    }
+  }
+}

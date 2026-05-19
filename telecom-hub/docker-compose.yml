@@ -1,0 +1,26 @@
+services:
+  meilisearch:
+    image: getmeili/meilisearch:v1.8
+    ports:
+      - "7700:7700"
+    environment:
+      MEILI_MASTER_KEY: masterKey
+      MEILI_ENV: development
+    volumes:
+      - meili_data:/meili_data
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: telecom
+      POSTGRES_PASSWORD: telecom
+      POSTGRES_DB: telecom_hub
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./services/api/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+
+volumes:
+  meili_data:
+  pg_data:
