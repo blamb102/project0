@@ -1,0 +1,13 @@
+{
+  "name": "project0",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix api\" \"npm run dev --prefix web\"",
+    "build": "npm run build --prefix web",
+    "test": "npm test --prefix api && npm test --prefix web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
