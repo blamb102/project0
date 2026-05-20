@@ -13,6 +13,7 @@ interface TDoc {
   agenda?: string
   relatedSpec?: string
   ftpUrl?: string
+  matchSource?: 'metadata' | 'fulltext' | 'both'
 }
 
 interface SearchResponse {
@@ -170,6 +171,14 @@ export default function SearchPage() {
                     {doc.meetingId}
                   </span>
                   <StatusBadge status={doc.status} />
+                  {(doc.matchSource === 'fulltext' || doc.matchSource === 'both') && (
+                    <span style={{
+                      background: '#eff6ff', color: '#1d4ed8',
+                      padding: '1px 8px', borderRadius: 9999, fontSize: 11, fontWeight: 600,
+                    }}>
+                      full text
+                    </span>
+                  )}
                 </div>
                 {doc.ftpUrl && (
                   <a href={doc.ftpUrl} target="_blank" rel="noreferrer"

@@ -100,6 +100,16 @@ CREATE TABLE IF NOT EXISTS folio_patents (
   PRIMARY KEY (folio_id, patent_id)
 );
 
+-- ── Full-text search index ───────────────────────────────────────────────────
+-- Stores only the tsvector (not the raw text) so body text is never persisted.
+
+CREATE TABLE IF NOT EXISTS tdoc_fulltext (
+  tdoc_id  TEXT PRIMARY KEY,
+  body_tsv TSVECTOR NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS tdoc_fulltext_tsv_idx ON tdoc_fulltext USING GIN (body_tsv);
+
 -- ── Crawl state ───────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS crawl_runs (

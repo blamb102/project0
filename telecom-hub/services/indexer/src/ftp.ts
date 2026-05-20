@@ -214,6 +214,56 @@ export async function fetchTDocs(meeting: Meeting): Promise<TDoc[]> {
   })
 }
 
+// ── Full-text extraction ──────────────────────────────────────────────────────
+// Downloads a TDoc file (tries .zip then .docx) and extracts plain text from
+// the Word document XML. Returns null if the file is missing or unparseable.
+// The raw buffer is never written to disk and is discarded after extraction.
+
+export async function extractDocText(tdocId: string, meetingFtpPath: string): Promise<string | null> {
+  for (const ext of ['.zip', '.docx'] as const) {
+    const url = `${config.ftpBase}/${meetingFtpPath}/Docs/${encodeURIComponent(tdocId)}${ext}`
+    try {
+      const res = await fetch(url)
+      if (!res.ok) continue
+      const buf = Buffer.from(await res.arrayBuffer())
+      const text = ext === '.zip' ? extractFromZip(buf) : extractFromDocx(buf)
+      if (text && text.length > 100) return text
+    } catch {
+      // file missing or corrupt — try next extension
+    }
+  }
+  return null
+}
+
+function extractFromZip(buf: Buffer): string | null {
+  try {
+    const zip = new AdmZip(buf)
+    const entry = zip.getEntries().find(e => e.entryName.endsWith('.docx'))
+    if (!entry) return null
+    return extractFromDocx(entry.getData())
+  } catch {
+    return null
+  }
+}
+
+function extractFromDocx(buf: Buffer): string | null {
+  try {
+    const docx = new AdmZip(buf)
+    const xmlEntry = docx.getEntry('word/document.xml')
+    if (!xmlEntry) return null
+    const xml = xmlEntry.getData().toString('utf8')
+    // Pull text out of <w:t> elements — the standard Word XML text run.
+    const text = Array.from(xml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g))
+      .map(m => m[1])
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    return text.length > 50 ? text : null
+  } catch {
+    return null
+  }
+}
+
 function normaliseStatus(raw: string): TDoc['status'] {
   const s = raw.toLowerCase().trim()
   if (s.includes('agree'))      return 'agreed'

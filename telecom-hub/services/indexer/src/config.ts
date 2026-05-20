@@ -6,6 +6,7 @@ export const config = {
   meilisearchKey: process.env.MEILISEARCH_MASTER_KEY ?? 'masterKey',
   crawlStatePath: process.env.CRAWL_STATE_PATH ?? '.crawl-state.json',
   batchSize: Number(process.env.CRAWL_BATCH_SIZE ?? 50),
+  databaseUrl: process.env.DATABASE_URL ?? '',
 }
 
 // Map CLI WG names → FTP sub-paths

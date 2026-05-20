@@ -1,17 +1,19 @@
 import * as cdk from 'aws-cdk-lib/core'
 import * as ec2 from 'aws-cdk-lib/aws-ec2'
+import * as iam from 'aws-cdk-lib/aws-iam'
 import * as s3 from 'aws-cdk-lib/aws-s3'
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront'
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins'
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs'
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2'
 import * as integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations'
 import { Construct } from 'constructs'
 import * as path from 'path'
 
-// Master key is fine for testing; replace with a secret before production.
 const MEILI_MASTER_KEY = 'th-masterKey-2024'
+const PG_PASSWORD      = 'th-pgPass-2024'
 
 export class TelecomHubStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -23,21 +25,42 @@ export class TelecomHubStack extends cdk.Stack {
       vpc: ec2.Vpc.fromLookup(this, 'DefaultVpc', { isDefault: true }),
       description: 'Meilisearch EC2',
     })
-    // Allow Meilisearch from anywhere (key-protected). Restrict post-testing.
     sg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(7700), 'Meilisearch HTTP')
-    sg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(22), 'SSH (optional)')
+    sg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(5432), 'PostgreSQL')
+    sg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(22),   'SSH (optional)')
 
     const userData = ec2.UserData.forLinux()
     userData.addCommands(
       'yum install -y docker',
       'systemctl enable --now docker',
-      `docker run -d --restart=always \\`,
+      // Meilisearch
+      `docker run -d --restart=always --name meilisearch \\`,
       `  -p 7700:7700 \\`,
       `  -e MEILI_MASTER_KEY=${MEILI_MASTER_KEY} \\`,
       `  -e MEILI_ENV=production \\`,
       `  -v /var/lib/meilisearch:/meili_data \\`,
       `  getmeili/meilisearch:v1.8`,
+      // Postgres (body-text FTS) — named volume avoids host bind-mount permission issues
+      `docker run -d --restart=always --name postgres \\`,
+      `  -p 5432:5432 \\`,
+      `  -e POSTGRES_USER=telecom \\`,
+      `  -e POSTGRES_PASSWORD=${PG_PASSWORD} \\`,
+      `  -e POSTGRES_DB=telecom_hub \\`,
+      `  -v telecom_pg_data:/var/lib/postgresql/data \\`,
+      `  postgres:16-alpine`,
+      // Wait for Postgres then create the FTS table
+      `for i in $(seq 1 30); do docker exec postgres pg_isready -U telecom && break; sleep 2; done`,
+      `docker exec postgres psql -U telecom -d telecom_hub -c "` +
+        `CREATE TABLE IF NOT EXISTS tdoc_fulltext (tdoc_id TEXT PRIMARY KEY, body_tsv TSVECTOR NOT NULL); ` +
+        `CREATE INDEX IF NOT EXISTS tdoc_fts_idx ON tdoc_fulltext USING GIN (body_tsv);"`,
     )
+
+    const ssmRole = new iam.Role(this, 'InstanceRole', {
+      assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
+      ],
+    })
 
     const meiliInstance = new ec2.Instance(this, 'MeiliInstance', {
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MICRO),
@@ -45,6 +68,7 @@ export class TelecomHubStack extends cdk.Stack {
       vpc: ec2.Vpc.fromLookup(this, 'DefaultVpc2', { isDefault: true }),
       securityGroup: sg,
       userData,
+      role: ssmRole,
     })
 
     // Elastic IP so the address survives stop/start
@@ -53,14 +77,20 @@ export class TelecomHubStack extends cdk.Stack {
 
     // ── Lambda search proxy ───────────────────────────────────────────────────
 
-    const searchFn = new lambda.Function(this, 'SearchFn', {
+    const searchFn = new NodejsFunction(this, 'SearchFn', {
+      entry: path.join(__dirname, '../../services/search-api/index.ts'),
+      projectRoot: path.join(__dirname, '../..'),
+      depsLockFilePath: path.join(__dirname, '../../pnpm-lock.yaml'),
       runtime: lambda.Runtime.NODEJS_20_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../../services/search-api')),
       timeout: cdk.Duration.seconds(10),
+      bundling: {
+        externalModules: ['pg-native'],
+        minify: false,
+      },
       environment: {
-        MEILISEARCH_URL: `http://${meiliHost}:7700`,
+        MEILISEARCH_URL:     `http://${meiliHost}:7700`,
         MEILISEARCH_MASTER_KEY: MEILI_MASTER_KEY,
+        DATABASE_URL: `postgres://telecom:${PG_PASSWORD}@${meiliHost}:5432/telecom_hub?sslmode=disable`,
       },
     })
 
@@ -132,6 +162,11 @@ export class TelecomHubStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'MeilisearchMasterKey', {
       value: MEILI_MASTER_KEY,
       description: 'Meilisearch master key for the indexer',
+    })
+
+    new cdk.CfnOutput(this, 'DatabaseUrl', {
+      value: `postgres://telecom:${PG_PASSWORD}@${meiliHost}:5432/telecom_hub?sslmode=disable`,
+      description: 'Postgres DATABASE_URL for the indexer --full-text flag',
     })
   }
 }
