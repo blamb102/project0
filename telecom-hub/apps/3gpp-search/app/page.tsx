@@ -17,7 +17,8 @@ interface TDoc {
 
 interface SearchResponse {
   hits: TDoc[]
-  totalHits: number
+  totalHits?: number
+  estimatedTotalHits?: number
   processingTimeMs: number
   query: string
 }
@@ -86,7 +87,7 @@ export default function SearchPage() {
       }
       const data: SearchResponse = await res.json()
       setResults(data.hits ?? [])
-      setTotal(data.totalHits ?? 0)
+      setTotal(data.totalHits ?? data.estimatedTotalHits ?? 0)
       setTiming(data.processingTimeMs ?? 0)
       setSearched(true)
     } finally {
