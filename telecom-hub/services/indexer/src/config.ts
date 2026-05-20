@@ -21,3 +21,17 @@ export const WG_PATHS: Record<string, string> = {
   CT1:   'TSG_CT/WG1_MM-CC-SM_ex-CN1',
   CT4:   'TSG_CT/WG4_protocollars',
 }
+
+// Map CLI WG names → TDoc index filename prefix (e.g. R1_Index(2024).zip)
+export const WG_PREFIXES: Record<string, string> = {
+  RAN1: 'R1',
+  RAN2: 'R2',
+  RAN3: 'R3',
+  RAN4: 'R4',
+  SA1:  'S1',
+  SA2:  'S2',
+  SA3:  'S3',
+  SA4:  'S4',
+  CT1:  'C1',
+  CT4:  'C4',
+}

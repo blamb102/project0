@@ -1,23 +1,35 @@
 {
-  "lastRun": "2026-05-19T13:04:11.131Z",
+  "lastRun": "2026-05-20T00:23:34.878Z",
   "meetings": {
-    "RAN1#3g": {
-      "meetingId": "RAN1#3g",
-      "ftpPath": "TSG_RAN/WG1_RL1/https://www.3gpp.org/ftp/TSG_RAN/WG1_RL1/TSGR1_AH",
-      "crawledAt": "2026-05-19T13:01:49.233Z",
-      "tdocCount": 0
-    },
     "RAN1#99": {
       "meetingId": "RAN1#99",
       "ftpPath": "TSG_RAN/WG1_RL1/TSGR1_99",
-      "crawledAt": "2026-05-19T13:04:11.010Z",
-      "tdocCount": 1836
+      "crawledAt": "2026-05-20T00:23:34.878Z",
+      "tdocCount": 1897
     },
     "RAN1#TSGR1_AH": {
       "meetingId": "RAN1#TSGR1_AH",
       "ftpPath": "TSG_RAN/WG1_RL1/TSGR1_AH",
-      "crawledAt": "2026-05-19T13:04:11.131Z",
+      "crawledAt": "2026-05-20T00:22:19.090Z",
       "tdocCount": 0
+    },
+    "RAN1#97": {
+      "meetingId": "RAN1#97",
+      "ftpPath": "TSG_RAN/WG1_RL1/TSGR1_97",
+      "crawledAt": "2026-05-20T00:23:28.558Z",
+      "tdocCount": 2049
+    },
+    "RAN1#98": {
+      "meetingId": "RAN1#98",
+      "ftpPath": "TSG_RAN/WG1_RL1/TSGR1_98",
+      "crawledAt": "2026-05-20T00:23:30.592Z",
+      "tdocCount": 1966
+    },
+    "RAN1#98b": {
+      "meetingId": "RAN1#98b",
+      "ftpPath": "TSG_RAN/WG1_RL1/TSGR1_98b",
+      "crawledAt": "2026-05-20T00:23:33.318Z",
+      "tdocCount": 1795
     }
   }
 }
