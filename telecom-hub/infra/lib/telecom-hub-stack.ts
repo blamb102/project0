@@ -180,6 +180,92 @@ export class TelecomHubStack extends cdk.Stack {
       distributionPaths: ['/*'],
     })
 
+    // ── Patent folio S3 bucket (24h auto-expire) ──────────────────────────────
+
+    const patentOutputBucket = new s3.Bucket(this, 'PatentOutputBucket', {
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      lifecycleRules: [{
+        expiration: cdk.Duration.days(1),
+        prefix: 'jobs/',
+      }],
+    })
+
+    // ── Patent worker Lambda (long timeout, async) ────────────────────────────
+
+    const patentWorkerFn = new NodejsFunction(this, 'PatentWorkerFn', {
+      entry: path.join(__dirname, '../../services/patent-api/worker.ts'),
+      projectRoot: path.join(__dirname, '../..'),
+      depsLockFilePath: path.join(__dirname, '../../pnpm-lock.yaml'),
+      runtime: lambda.Runtime.NODEJS_20_X,
+      timeout: cdk.Duration.minutes(10),
+      memorySize: 512,
+      bundling: { minify: false },
+      environment: {
+        PATENT_OUTPUT_BUCKET: patentOutputBucket.bucketName,
+        ANTHROPIC_API_KEY:    process.env.ANTHROPIC_API_KEY ?? '',
+        EPO_OPS_KEY:          process.env.EPO_OPS_KEY ?? '',
+        EPO_OPS_SECRET:       process.env.EPO_OPS_SECRET ?? '',
+      },
+    })
+    patentOutputBucket.grantReadWrite(patentWorkerFn)
+
+    // ── Patent API Lambda (orchestrator + status, fast) ───────────────────────
+
+    const patentApiFn = new NodejsFunction(this, 'PatentApiFn', {
+      entry: path.join(__dirname, '../../services/patent-api/index.ts'),
+      projectRoot: path.join(__dirname, '../..'),
+      depsLockFilePath: path.join(__dirname, '../../pnpm-lock.yaml'),
+      runtime: lambda.Runtime.NODEJS_20_X,
+      timeout: cdk.Duration.seconds(29),
+      bundling: { minify: false },
+      environment: {
+        PATENT_OUTPUT_BUCKET: patentOutputBucket.bucketName,
+        PATENT_WORKER_ARN:    patentWorkerFn.functionArn,
+      },
+    })
+    patentOutputBucket.grantReadWrite(patentApiFn)
+    patentWorkerFn.grantInvoke(patentApiFn)
+
+    // ── Add patent routes to existing search HTTP API ─────────────────────────
+
+    const patentInteg = new integrations.HttpLambdaIntegration('PatentInteg', patentApiFn)
+
+    new apigwv2.HttpRoute(this, 'PatentPostRoute', {
+      httpApi,
+      routeKey: apigwv2.HttpRouteKey.with('/api/patent', apigwv2.HttpMethod.POST),
+      integration: patentInteg,
+    })
+
+    new apigwv2.HttpRoute(this, 'PatentGetRoute', {
+      httpApi,
+      routeKey: apigwv2.HttpRouteKey.with('/api/patent/{jobId}', apigwv2.HttpMethod.GET),
+      integration: patentInteg,
+    })
+
+    // ── Add /api/patent CloudFront behaviors ──────────────────────────────────
+
+    const patentHostname = `${httpApi.apiId}.execute-api.${this.region}.amazonaws.com`
+
+    distribution.addBehavior('/api/patent', new origins.HttpOrigin(patentHostname, {
+      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+    }), {
+      allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+      cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+      originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+    })
+
+    distribution.addBehavior('/api/patent/*', new origins.HttpOrigin(patentHostname, {
+      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+    }), {
+      allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+      cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+      originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+    })
+
     // ── Outputs ───────────────────────────────────────────────────────────────
 
     new cdk.CfnOutput(this, 'SearchUiUrl', {
@@ -200,6 +286,11 @@ export class TelecomHubStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DatabaseUrl', {
       value: `postgres://telecom:${PG_PASSWORD}@${meiliHost}:5432/telecom_hub?sslmode=disable`,
       description: 'Postgres DATABASE_URL for the indexer --full-text flag',
+    })
+
+    new cdk.CfnOutput(this, 'PatentOutputBucketName', {
+      value: patentOutputBucket.bucketName,
+      description: 'S3 bucket where patent folio ZIPs are stored',
     })
   }
 }
