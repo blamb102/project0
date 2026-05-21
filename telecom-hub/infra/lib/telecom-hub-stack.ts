@@ -204,7 +204,6 @@ export class TelecomHubStack extends cdk.Stack {
       bundling: { minify: false },
       environment: {
         PATENT_OUTPUT_BUCKET: patentOutputBucket.bucketName,
-        ANTHROPIC_API_KEY:    process.env.ANTHROPIC_API_KEY ?? '',
         EPO_OPS_KEY:          process.env.EPO_OPS_KEY ?? '',
         EPO_OPS_SECRET:       process.env.EPO_OPS_SECRET ?? '',
       },

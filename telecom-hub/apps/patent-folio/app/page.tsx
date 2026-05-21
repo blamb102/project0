@@ -291,7 +291,6 @@ export default function PatentFolioPage() {
 const STEPS = [
   'Fetching patent data',
   'Fetching file history',
-  'Generating AI summary',
   'Generating documents',
   'Building ZIP',
   'Uploading ZIP',

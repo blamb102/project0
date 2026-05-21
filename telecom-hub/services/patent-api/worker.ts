@@ -1,6 +1,5 @@
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
 import JSZip from 'jszip'
-import Anthropic from '@anthropic-ai/sdk'
 import {
   fetchPatentData, fetchClaims, fetchPatentPdf,
   fetchFileHistory, fetchFileHistoryDoc, fetchPatentFamily,
@@ -27,31 +26,6 @@ async function setStatus(jobId: string, status: object) {
   }))
 }
 
-async function aiFileHistorySummary(
-  patentTitle: string,
-  history: Awaited<ReturnType<typeof fetchFileHistory>>,
-): Promise<string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) return '(ANTHROPIC_API_KEY not configured)'
-
-  const client   = new Anthropic({ apiKey })
-  const timeline = history
-    .map(d => `${d.date} [${d.docCode}] ${d.description}`)
-    .join('\n')
-
-  const message = await client.messages.create({
-    model:      'claude-sonnet-4-6',
-    max_tokens: 1024,
-    messages: [{
-      role: 'user',
-      content: `You are a patent prosecution analyst. Summarize the following file history for the patent "${patentTitle}". Describe: key examination issues raised by the examiner, how the applicant responded, any amendments to the claims, and how the patent ultimately reached allowance (if it did). Be concise and specific.\n\nFile History:\n${timeline}`,
-    }],
-  })
-
-  const block = message.content[0]
-  return block.type === 'text' ? block.text : ''
-}
-
 export const handler = async (event: WorkerPayload) => {
   const { jobId, patentNumber } = event
 
@@ -73,13 +47,8 @@ export const handler = async (event: WorkerPayload) => {
     const appNum = patent.appNumber || patentNumber
     const history = await fetchFileHistory(appNum)
 
-    await setStatus(jobId, { status: 'running', step: 'Generating AI summary' })
-
-    // Step 3: AI summary + patent PDF in parallel
-    const [aiSummary, pdfBuffer] = await Promise.all([
-      aiFileHistorySummary(patent.title, history),
-      fetchPatentPdf(patentNumber),
-    ])
+    // Step 3: patent PDF
+    const pdfBuffer = await fetchPatentPdf(patentNumber)
 
     await setStatus(jobId, { status: 'running', step: 'Generating documents' })
 
@@ -88,7 +57,7 @@ export const handler = async (event: WorkerPayload) => {
       buildPatentDoc(patent),
       buildClaimsDoc(patent, claims),
       buildClaimChartDoc(patent, claims),
-      buildFileHistorySummaryDoc(patent, history, aiSummary),
+      buildFileHistorySummaryDoc(patent, history, ''),
       buildFamilyDoc(patent, family.members),
     ])
 
