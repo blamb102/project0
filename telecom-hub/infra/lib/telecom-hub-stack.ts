@@ -180,6 +180,16 @@ export class TelecomHubStack extends cdk.Stack {
       distributionPaths: ['/*'],
     })
 
+    new s3deploy.BucketDeployment(this, 'PatentFolioDeploy', {
+      sources: [
+        s3deploy.Source.asset(path.join(__dirname, '../../apps/patent-folio/out')),
+      ],
+      destinationBucket: uiBucket,
+      destinationKeyPrefix: 'patent',
+      distribution,
+      distributionPaths: ['/patent', '/patent/*'],
+    })
+
     // ── Patent folio S3 bucket (24h auto-expire) ──────────────────────────────
 
     const patentOutputBucket = new s3.Bucket(this, 'PatentOutputBucket', {
