@@ -35,10 +35,16 @@ export interface PatentFamily {
   members: FamilyMember[]
 }
 
-// ── PatentsView ───────────────────────────────────────────────────────────────
+// ── USPTO ODP API ─────────────────────────────────────────────────────────────
 
-export async function fetchPatentData(patentOrApp: string): Promise<PatentData> {
-  const cleanNum = patentOrApp.replace(/[^0-9A-Za-z]/g, '')
+const ODP_BASE = 'https://api.openapi.uspto.gov/api/v1'
+
+// Returns metadata + claims in one request so the worker makes a single call.
+export async function fetchPatentWithClaims(
+  patentNumber: string,
+): Promise<{ patent: PatentData; claims: string[] }> {
+  const cleanNum = patentNumber.replace(/[^0-9]/g, '')
+  const apiKey   = process.env.USPTO_ODP_KEY ?? ''
   const fallback: PatentData = {
     patentNumber: cleanNum,
     appNumber:    '',
@@ -53,67 +59,54 @@ export async function fetchPatentData(patentOrApp: string): Promise<PatentData> 
   }
 
   try {
-    const pvRes = await fetch('https://api.patentsview.org/patents/query', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        q: { patent_number: cleanNum },
-        f: [
-          'patent_number', 'app_number', 'patent_title', 'patent_abstract',
-          'patent_date', 'app_date', 'inventor_first_name', 'inventor_last_name',
-          'assignee_organization',
-        ],
-        o: { per_page: 1 },
-      }),
+    const res = await fetch(`${ODP_BASE}/patent/${cleanNum}`, {
+      headers: {
+        'X-Api-Key': apiKey,
+        Accept:      'application/json',
+      },
+      signal: AbortSignal.timeout(20_000),
     })
+    if (!res.ok) return { patent: fallback, claims: [] }
 
-    if (!pvRes.ok) return fallback
-    const pv: any = await pvRes.json()
-    const p = pv.patents?.[0]
-    if (!p) return fallback
+    const d: any = await res.json()
 
-    const inventors = (p.inventors ?? []).map(
-      (i: any) => `${i.inventor_first_name ?? ''} ${i.inventor_last_name ?? ''}`.trim(),
-    )
-    return {
-      patentNumber: p.patent_number ?? cleanNum,
-      appNumber:    p.app_number ?? '',
-      title:        p.patent_title ?? '',
-      abstract:     p.patent_abstract ?? '',
+    // Field names vary slightly across ODP API versions — try all known variants
+    const title    = d.patentTitle        ?? d.patentTitleText    ?? d.inventionTitle ?? ''
+    const abstract = d.abstractText       ?? d.patentAbstractText ?? d.abstract       ?? ''
+    const appNum   = d.applicationNumber  ?? d.patentApplicationNumber               ?? ''
+    const issued   = d.patentDate         ?? d.patentIssueDateText ?? d.issueDate     ?? ''
+    const filed    = d.applicationDate    ?? d.filingDate ?? d.patentFilingDateText   ?? ''
+    const assignee = (d.assignees ?? d.applicants ?? [])[0]?.assigneeName
+                  ?? (d.assignees ?? d.applicants ?? [])[0]?.assigneeNameText
+                  ?? (d.assignees ?? d.applicants ?? [])[0]?.name
+                  ?? ''
+    const inventors: string[] = (d.inventors ?? []).map((i: any) =>
+      i.inventorName ?? i.inventorNameText
+        ?? `${i.firstName ?? i.inventorFirstName ?? ''} ${i.lastName ?? i.inventorLastName ?? ''}`.trim()
+    ).filter(Boolean)
+
+    const patent: PatentData = {
+      patentNumber: d.patentNumber ?? cleanNum,
+      appNumber:    appNum,
+      title,
+      abstract,
       claims:       [],
       inventors,
-      assignee:     p.assignees?.[0]?.assignee_organization ?? '',
-      filingDate:   p.app_date ?? '',
-      issueDate:    p.patent_date ?? '',
+      assignee,
+      filingDate:   filed,
+      issueDate:    issued,
       pdfUrl:       `https://image-ppubs.uspto.gov/dirsearch-public/print/downloadPdf/${cleanNum}`,
     }
-  } catch {
-    return fallback
-  }
-}
 
-// ── Patent claims via PatentsView ─────────────────────────────────────────────
-
-export async function fetchClaims(patentNumber: string): Promise<string[]> {
-  try {
-    const res = await fetch('https://api.patentsview.org/patents/query', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        q: { patent_number: patentNumber.replace(/[^0-9A-Za-z]/g, '') },
-        f: ['claim_text', 'claim_number', 'claim_dependent'],
-        o: { per_page: 1 },
-      }),
-    })
-    if (!res.ok) return []
-    const data: any = await res.json()
-    const claims: any[] = data.patents?.[0]?.claims ?? []
-    return claims
-      .sort((a: any, b: any) => Number(a.claim_number) - Number(b.claim_number))
-      .map((c: any) => c.claim_text ?? '')
+    const rawClaims: any[] = d.claims ?? d.claimText ?? []
+    const claims = (Array.isArray(rawClaims) ? rawClaims : [])
+      .sort((a: any, b: any) => Number(a.claimNumber ?? a.number ?? 0) - Number(b.claimNumber ?? b.number ?? 0))
+      .map((c: any) => c.claimText ?? c.text ?? c.claimStatement ?? '')
       .filter(Boolean)
+
+    return { patent, claims }
   } catch {
-    return []
+    return { patent: fallback, claims: [] }
   }
 }
 

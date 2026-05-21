@@ -1,7 +1,7 @@
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
 import JSZip from 'jszip'
 import {
-  fetchPatentData, fetchClaims, fetchPatentPdf,
+  fetchPatentWithClaims, fetchPatentPdf,
   fetchFileHistory, fetchFileHistoryDoc, fetchPatentFamily,
 } from './sources'
 import {
@@ -32,10 +32,9 @@ export const handler = async (event: WorkerPayload) => {
   await setStatus(jobId, { status: 'running', step: 'Fetching patent data' })
 
   try {
-    // Step 1: fetch patent metadata + claims in parallel
-    const [patent, claims, family] = await Promise.all([
-      fetchPatentData(patentNumber),
-      fetchClaims(patentNumber),
+    // Step 1: fetch patent metadata + claims (single ODP call) + family in parallel
+    const [{ patent, claims }, family] = await Promise.all([
+      fetchPatentWithClaims(patentNumber),
       fetchPatentFamily(patentNumber),
     ])
 

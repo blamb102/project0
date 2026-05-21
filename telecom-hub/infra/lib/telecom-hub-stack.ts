@@ -231,6 +231,7 @@ function handler(event) {
       bundling: { minify: false },
       environment: {
         PATENT_OUTPUT_BUCKET: patentOutputBucket.bucketName,
+        USPTO_ODP_KEY:        process.env.USPTO_ODP_KEY ?? '',
         EPO_OPS_KEY:          process.env.EPO_OPS_KEY ?? '',
         EPO_OPS_SECRET:       process.env.EPO_OPS_SECRET ?? '',
       },
