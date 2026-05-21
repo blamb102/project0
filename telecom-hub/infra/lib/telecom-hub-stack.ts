@@ -135,12 +135,29 @@ export class TelecomHubStack extends cdk.Stack {
     const apiHostname     = `${httpApi.apiId}.execute-api.${this.region}.amazonaws.com`
     const analyzeHostname = `${analyzeApi.apiId}.execute-api.${this.region}.amazonaws.com`
 
+    // Rewrites directory paths (no extension) to /index.html so subdir apps load
+    const subdirRewriteFn = new cloudfront.Function(this, 'SubdirIndexRewrite', {
+      code: cloudfront.FunctionCode.fromInline(`
+function handler(event) {
+  var uri = event.request.uri;
+  if (uri !== '/' && !uri.substring(uri.lastIndexOf('/')).includes('.')) {
+    event.request.uri = uri.replace(/\\/$/, '') + '/index.html';
+  }
+  return event.request;
+}
+      `),
+    })
+
     const distribution = new cloudfront.Distribution(this, 'SearchDistribution', {
       defaultRootObject: 'index.html',
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(uiBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        functionAssociations: [{
+          function: subdirRewriteFn,
+          eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+        }],
       },
       additionalBehaviors: {
         '/api/analyze': {
