@@ -94,8 +94,30 @@ export class TelecomHubStack extends cdk.Stack {
       },
     })
 
+    const analystFn = new NodejsFunction(this, 'AnalystFn', {
+      entry: path.join(__dirname, '../../services/analyst-api/index.ts'),
+      projectRoot: path.join(__dirname, '../..'),
+      depsLockFilePath: path.join(__dirname, '../../pnpm-lock.yaml'),
+      runtime: lambda.Runtime.NODEJS_20_X,
+      timeout: cdk.Duration.seconds(60),
+      bundling: { minify: false },
+      environment: {
+        MEILISEARCH_URL:        `http://${meiliHost}:7700`,
+        MEILISEARCH_MASTER_KEY: MEILI_MASTER_KEY,
+        ANTHROPIC_API_KEY:      process.env.ANTHROPIC_API_KEY ?? '',
+      },
+    })
+
     const httpApi = new apigwv2.HttpApi(this, 'SearchApi', {
       defaultIntegration: new integrations.HttpLambdaIntegration('SearchInteg', searchFn),
+      corsPreflight: {
+        allowOrigins: ['*'],
+        allowMethods: [apigwv2.CorsHttpMethod.GET, apigwv2.CorsHttpMethod.OPTIONS],
+      },
+    })
+
+    const analyzeApi = new apigwv2.HttpApi(this, 'AnalyzeApi', {
+      defaultIntegration: new integrations.HttpLambdaIntegration('AnalyzeInteg', analystFn),
       corsPreflight: {
         allowOrigins: ['*'],
         allowMethods: [apigwv2.CorsHttpMethod.GET, apigwv2.CorsHttpMethod.OPTIONS],
@@ -110,7 +132,8 @@ export class TelecomHubStack extends cdk.Stack {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
     })
 
-    const apiHostname = `${httpApi.apiId}.execute-api.${this.region}.amazonaws.com`
+    const apiHostname     = `${httpApi.apiId}.execute-api.${this.region}.amazonaws.com`
+    const analyzeHostname = `${analyzeApi.apiId}.execute-api.${this.region}.amazonaws.com`
 
     const distribution = new cloudfront.Distribution(this, 'SearchDistribution', {
       defaultRootObject: 'index.html',
@@ -120,6 +143,16 @@ export class TelecomHubStack extends cdk.Stack {
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
       },
       additionalBehaviors: {
+        '/api/analyze': {
+          origin: new origins.HttpOrigin(analyzeHostname, {
+            protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+          }),
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy:
+            cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        },
         '/api/*': {
           origin: new origins.HttpOrigin(apiHostname, {
             protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,

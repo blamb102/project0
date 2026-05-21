@@ -2,6 +2,39 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+// ── Simple markdown renderer (bold, headers, bullets) ─────────────────────────
+
+function SimpleMarkdown({ text }: { text: string }) {
+  const lines = text.split('\n')
+  const elements: React.ReactNode[] = []
+  let key = 0
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.startsWith('## ')) {
+      elements.push(<h3 key={key++} style={{ fontSize: 15, fontWeight: 700, margin: '14px 0 4px', color: '#111' }}>{inline(line.slice(3))}</h3>)
+    } else if (line.startsWith('# ')) {
+      elements.push(<h2 key={key++} style={{ fontSize: 17, fontWeight: 700, margin: '16px 0 6px', color: '#111' }}>{inline(line.slice(2))}</h2>)
+    } else if (/^[\-\*] /.test(line)) {
+      elements.push(<li key={key++} style={{ margin: '2px 0', paddingLeft: 4, fontSize: 14, color: '#374151', lineHeight: 1.6 }}>{inline(line.slice(2))}</li>)
+    } else if (line.trim() === '') {
+      elements.push(<div key={key++} style={{ height: 6 }} />)
+    } else {
+      elements.push(<p key={key++} style={{ margin: '4px 0', fontSize: 14, color: '#374151', lineHeight: 1.6 }}>{inline(line)}</p>)
+    }
+  }
+  return <div style={{ listStyle: 'disc', paddingLeft: 16 }}>{elements}</div>
+}
+
+function inline(text: string): React.ReactNode {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g)
+  return parts.map((p, i) =>
+    p.startsWith('**') && p.endsWith('**')
+      ? <strong key={i}>{p.slice(2, -2)}</strong>
+      : p
+  )
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface TDoc {
@@ -185,7 +218,7 @@ function FilterDropdown({
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function SearchPage() {
-  const [tab, setTab] = useState<'tdocs' | 'emails'>('tdocs')
+  const [tab, setTab] = useState<'tdocs' | 'emails' | 'analyst'>('tdocs')
 
   // Shared
   const [query, setQuery]     = useState('')
@@ -212,11 +245,17 @@ export default function SearchPage() {
   const [selYears, setSelYears]           = useState<string[]>([])
   const [emailSortBy, setEmailSortBy]     = useState('dateTs:desc')
 
+  // Analyst state
+  const [analystTopic,    setAnalystTopic]    = useState('')
+  const [analystResult,   setAnalystResult]   = useState<{ analysis: string; tdocCount: number; emailCount: number } | null>(null)
+  const [analystLoading,  setAnalystLoading]  = useState(false)
+  const [analystError,    setAnalystError]    = useState('')
+
   const SEARCH_URL    = process.env.NEXT_PUBLIC_SEARCH_URL ?? '/api/search'
   const IS_MEILI_DIRECT = SEARCH_URL.includes('/indexes/')
 
   const search = useCallback(async (
-    currentTab: 'tdocs' | 'emails',
+    currentTab: 'tdocs' | 'emails' | 'analyst',
     q: string, off: number,
     statuses: string[], meetings: string[], types: string[], tdocSort: string,
     lists: string[], years: string[], emailSort: string,
@@ -291,10 +330,28 @@ export default function SearchPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  const switchTab = (t: 'tdocs' | 'emails') => {
+  const switchTab = (t: 'tdocs' | 'emails' | 'analyst') => {
     setTab(t)
     setSearched(false)
     setOffset(0)
+  }
+
+  const runAnalysis = async () => {
+    if (!analystTopic.trim() || analystLoading) return
+    setAnalystLoading(true)
+    setAnalystError('')
+    setAnalystResult(null)
+    try {
+      const p = new URLSearchParams({ q: analystTopic.trim() })
+      const res = await fetch(`/api/analyze?${p}`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+      setAnalystResult(data)
+    } catch (e: any) {
+      setAnalystError(e.message)
+    } finally {
+      setAnalystLoading(false)
+    }
   }
 
   const total    = tab === 'tdocs' ? tdocTotal    : emailTotal
@@ -317,20 +374,88 @@ export default function SearchPage() {
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 0, marginBottom: '1rem', borderBottom: '2px solid #e5e7eb' }}>
-        {(['tdocs', 'emails'] as const).map(t => (
+        {([['tdocs', 'TDocs'], ['emails', 'Email Reflector'], ['analyst', '✦ AI Analyst']] as const).map(([t, label]) => (
           <button key={t} onClick={() => switchTab(t)} style={{
             padding: '8px 20px', border: 'none', background: 'none', cursor: 'pointer',
             fontSize: 14, fontWeight: tab === t ? 600 : 400,
-            color: tab === t ? '#2563eb' : '#6b7280',
-            borderBottom: `2px solid ${tab === t ? '#2563eb' : 'transparent'}`,
+            color: tab === t ? '#7c3aed' : '#6b7280',
+            borderBottom: `2px solid ${tab === t ? '#7c3aed' : 'transparent'}`,
             marginBottom: -2,
           }}>
-            {t === 'tdocs' ? 'TDocs' : 'Email Reflector'}
+            {label}
           </button>
         ))}
       </div>
 
-      {/* Search box */}
+      {/* Analyst panel */}
+      {tab === 'analyst' && (
+        <div style={{ marginBottom: '1.5rem' }}>
+          <p style={{ margin: '0 0 0.75rem', fontSize: 14, color: '#6b7280' }}>
+            Ask a question about 3GPP standardization activity. The analyst will search TDocs and email archives, then synthesize an answer using AI.
+          </p>
+          <div style={{ display: 'flex', gap: 8, marginBottom: '0.75rem' }}>
+            <input
+              autoFocus
+              type="text"
+              placeholder="e.g. What are the trends in uplink MIMO? Which companies are leading on NR-U?"
+              value={analystTopic}
+              onChange={e => setAnalystTopic(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && runAnalysis()}
+              style={{
+                flex: 1, padding: '10px 14px', fontSize: 15,
+                border: '1.5px solid #d1d5db', borderRadius: 8, outline: 'none',
+                boxShadow: '0 1px 3px rgba(0,0,0,.07)',
+              }}
+            />
+            <button
+              onClick={runAnalysis}
+              disabled={analystLoading || !analystTopic.trim()}
+              style={{
+                padding: '10px 20px', borderRadius: 8, border: 'none',
+                background: analystLoading || !analystTopic.trim() ? '#e5e7eb' : '#7c3aed',
+                color: analystLoading || !analystTopic.trim() ? '#9ca3af' : '#fff',
+                fontSize: 14, fontWeight: 600, cursor: analystLoading || !analystTopic.trim() ? 'not-allowed' : 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {analystLoading ? 'Analyzing…' : 'Analyze'}
+            </button>
+          </div>
+
+          {analystLoading && (
+            <div style={{ padding: '2rem', textAlign: 'center', color: '#7c3aed', fontSize: 14 }}>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>⏳</div>
+              Searching documents and generating analysis…
+            </div>
+          )}
+
+          {analystError && (
+            <div style={{ padding: '1rem', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, color: '#dc2626', fontSize: 14 }}>
+              Error: {analystError}
+            </div>
+          )}
+
+          {analystResult && (
+            <div style={{ border: '1px solid #ede9fe', borderRadius: 8, background: '#fff', overflow: 'hidden' }}>
+              <div style={{ padding: '10px 16px', background: '#f5f3ff', borderBottom: '1px solid #ede9fe', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#7c3aed' }}>AI Analysis</span>
+                <span style={{ fontSize: 12, color: '#8b5cf6' }}>
+                  Based on {analystResult.tdocCount} TDocs + {analystResult.emailCount} emails
+                </span>
+              </div>
+              <div style={{ padding: '16px 20px' }}>
+                <SimpleMarkdown text={analystResult.analysis} />
+              </div>
+              <div style={{ padding: '8px 16px', borderTop: '1px solid #ede9fe', background: '#fafaf9', fontSize: 11, color: '#9ca3af' }}>
+                Generated by Claude · Results based on indexed content only · Verify claims against source documents
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Search + filters + results (hidden on analyst tab) */}
+      {tab !== 'analyst' && <>
       <div style={{ position: 'relative', marginBottom: '0.75rem' }}>
         <input
           autoFocus
@@ -522,6 +647,7 @@ export default function SearchPage() {
           <p>Start typing to search {tab === 'tdocs' ? 'indexed TDocs' : 'the email reflector'}.</p>
         </div>
       )}
+      </>} {/* end tab !== 'analyst' */}
 
       {/* Pagination */}
       {total > PAGE_SIZE && (
