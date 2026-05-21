@@ -21,7 +21,7 @@ export async function ensureIndex(): Promise<void> {
     await index.updateFilterableAttributes([
       'id', 'workingGroup', 'type', 'status', 'meetingId', 'relatedSpec',
     ])
-    await index.updateSortableAttributes(['indexedAt'])
+    await index.updateSortableAttributes(['indexedAt', 'meetingId'])
     console.log(`  Created Meilisearch index "${TDOC_INDEX}"`)
   }
 }
