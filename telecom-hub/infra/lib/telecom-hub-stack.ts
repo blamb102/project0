@@ -9,6 +9,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda'
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs'
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2'
 import * as integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations'
+import * as ssm from 'aws-cdk-lib/aws-ssm'
 import { Construct } from 'constructs'
 import * as path from 'path'
 
@@ -135,12 +136,29 @@ export class TelecomHubStack extends cdk.Stack {
     const apiHostname     = `${httpApi.apiId}.execute-api.${this.region}.amazonaws.com`
     const analyzeHostname = `${analyzeApi.apiId}.execute-api.${this.region}.amazonaws.com`
 
+    // Rewrites directory paths (no extension) to /index.html so subdir apps load
+    const subdirRewriteFn = new cloudfront.Function(this, 'SubdirIndexRewrite', {
+      code: cloudfront.FunctionCode.fromInline(`
+function handler(event) {
+  var uri = event.request.uri;
+  if (uri !== '/' && !uri.substring(uri.lastIndexOf('/')).includes('.')) {
+    event.request.uri = uri.replace(/\\/$/, '') + '/index.html';
+  }
+  return event.request;
+}
+      `),
+    })
+
     const distribution = new cloudfront.Distribution(this, 'SearchDistribution', {
       defaultRootObject: 'index.html',
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(uiBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        functionAssociations: [{
+          function: subdirRewriteFn,
+          eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+        }],
       },
       additionalBehaviors: {
         '/api/analyze': {
@@ -180,6 +198,102 @@ export class TelecomHubStack extends cdk.Stack {
       distributionPaths: ['/*'],
     })
 
+    new s3deploy.BucketDeployment(this, 'PatentFolioDeploy', {
+      sources: [
+        s3deploy.Source.asset(path.join(__dirname, '../../apps/patent-folio/out')),
+      ],
+      destinationBucket: uiBucket,
+      destinationKeyPrefix: 'patent',
+      distribution,
+      distributionPaths: ['/patent', '/patent/*'],
+    })
+
+    // ── Patent folio S3 bucket (24h auto-expire) ──────────────────────────────
+
+    const patentOutputBucket = new s3.Bucket(this, 'PatentOutputBucket', {
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      lifecycleRules: [{
+        expiration: cdk.Duration.days(1),
+        prefix: 'jobs/',
+      }],
+    })
+
+    // ── Patent worker Lambda (long timeout, async) ────────────────────────────
+
+    const patentWorkerFn = new NodejsFunction(this, 'PatentWorkerFn', {
+      entry: path.join(__dirname, '../../services/patent-api/worker.ts'),
+      projectRoot: path.join(__dirname, '../..'),
+      depsLockFilePath: path.join(__dirname, '../../pnpm-lock.yaml'),
+      runtime: lambda.Runtime.NODEJS_20_X,
+      timeout: cdk.Duration.minutes(10),
+      memorySize: 512,
+      bundling: { minify: false },
+      environment: {
+        PATENT_OUTPUT_BUCKET: patentOutputBucket.bucketName,
+        USPTO_ODP_KEY:        ssm.StringParameter.valueForStringParameter(this, '/telecom-hub/uspto-odp-key'),
+        EPO_OPS_KEY:          ssm.StringParameter.valueForStringParameter(this, '/telecom-hub/epo-ops-key'),
+        EPO_OPS_SECRET:       ssm.StringParameter.valueForStringParameter(this, '/telecom-hub/epo-ops-secret'),
+      },
+    })
+    patentOutputBucket.grantReadWrite(patentWorkerFn)
+
+    // ── Patent API Lambda (orchestrator + status, fast) ───────────────────────
+
+    const patentApiFn = new NodejsFunction(this, 'PatentApiFn', {
+      entry: path.join(__dirname, '../../services/patent-api/index.ts'),
+      projectRoot: path.join(__dirname, '../..'),
+      depsLockFilePath: path.join(__dirname, '../../pnpm-lock.yaml'),
+      runtime: lambda.Runtime.NODEJS_20_X,
+      timeout: cdk.Duration.seconds(29),
+      bundling: { minify: false },
+      environment: {
+        PATENT_OUTPUT_BUCKET: patentOutputBucket.bucketName,
+        PATENT_WORKER_ARN:    patentWorkerFn.functionArn,
+      },
+    })
+    patentOutputBucket.grantReadWrite(patentApiFn)
+    patentWorkerFn.grantInvoke(patentApiFn)
+
+    // ── Add patent routes to existing search HTTP API ─────────────────────────
+
+    const patentInteg = new integrations.HttpLambdaIntegration('PatentInteg', patentApiFn)
+
+    new apigwv2.HttpRoute(this, 'PatentPostRoute', {
+      httpApi,
+      routeKey: apigwv2.HttpRouteKey.with('/api/patent', apigwv2.HttpMethod.POST),
+      integration: patentInteg,
+    })
+
+    new apigwv2.HttpRoute(this, 'PatentGetRoute', {
+      httpApi,
+      routeKey: apigwv2.HttpRouteKey.with('/api/patent/{jobId}', apigwv2.HttpMethod.GET),
+      integration: patentInteg,
+    })
+
+    // ── Add /api/patent CloudFront behaviors ──────────────────────────────────
+
+    const patentHostname = `${httpApi.apiId}.execute-api.${this.region}.amazonaws.com`
+
+    distribution.addBehavior('/api/patent', new origins.HttpOrigin(patentHostname, {
+      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+    }), {
+      allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+      cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+      originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+    })
+
+    distribution.addBehavior('/api/patent/*', new origins.HttpOrigin(patentHostname, {
+      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+    }), {
+      allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+      cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+      originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+    })
+
     // ── Outputs ───────────────────────────────────────────────────────────────
 
     new cdk.CfnOutput(this, 'SearchUiUrl', {
@@ -200,6 +314,11 @@ export class TelecomHubStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DatabaseUrl', {
       value: `postgres://telecom:${PG_PASSWORD}@${meiliHost}:5432/telecom_hub?sslmode=disable`,
       description: 'Postgres DATABASE_URL for the indexer --full-text flag',
+    })
+
+    new cdk.CfnOutput(this, 'PatentOutputBucketName', {
+      value: patentOutputBucket.bucketName,
+      description: 'S3 bucket where patent folio ZIPs are stored',
     })
   }
 }
