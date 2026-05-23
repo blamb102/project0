@@ -30,6 +30,8 @@ export const handler = async (event: any) => {
   if (method === 'POST' && rawPath === '/api/patent') {
     const body          = JSON.parse(event.body ?? '{}')
     const patentNumber  = (body.patentNumber ?? '').trim()
+    const nickname      = (body.nickname ?? '').trim() || undefined
+    const items: string[] | undefined = Array.isArray(body.items) ? body.items : undefined
     if (!patentNumber) return resp(400, { error: 'patentNumber is required' })
 
     const jobId = randomUUID()
@@ -41,7 +43,7 @@ export const handler = async (event: any) => {
     await lambda.send(new InvokeCommand({
       FunctionName:   WORKER_ARN,
       InvocationType: 'Event',
-      Payload:        Buffer.from(JSON.stringify({ jobId, patentNumber })),
+      Payload:        Buffer.from(JSON.stringify({ jobId, patentNumber, nickname, items })),
     }))
 
     return resp(202, { jobId })

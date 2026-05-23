@@ -1,6 +1,23 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+
+function computeDefaultNick(patNum: string): string {
+  const digits = patNum.replace(/[^0-9]/g, '')
+  const last3  = digits.slice(-3)
+  return last3 ? `${last3} patent` : ''
+}
+
+const FOLIO_ITEMS = [
+  { key: 'patentPdf',          label: 'Patent PDF' },
+  { key: 'patentText',         label: 'Patent text (DOCX)' },
+  { key: 'claims',             label: 'Claims (DOCX)' },
+  { key: 'claimChart',         label: 'Claim chart template (DOCX)' },
+  { key: 'fileHistorySummary', label: 'File history summary (DOCX)' },
+  { key: 'patentFamily',       label: 'Patent family (Excel)' },
+  { key: 'fileHistoryPdf',     label: 'File history PDF' },
+]
+const ALL_KEYS = FOLIO_ITEMS.map(i => i.key)
 
 interface JobStatus {
   status: 'pending' | 'running' | 'complete' | 'error'
@@ -19,7 +36,27 @@ interface JobStatus {
 
 export default function PatentFolioPage() {
   const [patentNumber, setPatentNumber] = useState('')
+  const [nickname, setNickname] = useState('')
+  const [nicknameCustomized, setNicknameCustomized] = useState(false)
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set(ALL_KEYS))
   const [jobId, setJobId] = useState<string | null>(null)
+
+  function toggleItem(key: string) {
+    setSelectedItems(prev => {
+      const next = new Set(prev)
+      next.has(key) ? next.delete(key) : next.add(key)
+      return next
+    })
+  }
+
+  function toggleAll() {
+    setSelectedItems(selectedItems.size === ALL_KEYS.length ? new Set() : new Set(ALL_KEYS))
+  }
+
+  // Auto-fill nickname from patent number unless user has customized it
+  useEffect(() => {
+    if (!nicknameCustomized) setNickname(computeDefaultNick(patentNumber))
+  }, [patentNumber, nicknameCustomized])
   const [status, setStatus] = useState<JobStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -37,7 +74,11 @@ export default function PatentFolioPage() {
       const res = await fetch('/api/patent', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ patentNumber: clean }),
+        body:    JSON.stringify({
+          patentNumber: clean,
+          nickname:     nickname.trim() || undefined,
+          items:        [...selectedItems],
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -71,6 +112,9 @@ export default function PatentFolioPage() {
   function reset() {
     if (pollTimer) clearInterval(pollTimer)
     setPatentNumber('')
+    setNickname('')
+    setNicknameCustomized(false)
+    setSelectedItems(new Set(ALL_KEYS))
     setJobId(null)
     setStatus(null)
     setLoading(false)
@@ -151,6 +195,71 @@ export default function PatentFolioPage() {
           <p style={{ fontSize: '0.8rem', color: '#888', marginTop: '0.4rem' }}>
             Accepts formats: 11234567, 11,234,567, US11234567B2, 17/123456, 17123456
           </p>
+
+          <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.5rem', marginTop: '1rem', color: '#333' }}>
+            Nickname <span style={{ fontWeight: 400, color: '#888' }}>(optional — used to name output files)</span>
+          </label>
+          <input
+            type="text"
+            value={nickname}
+            onChange={e => { setNickname(e.target.value); setNicknameCustomized(true) }}
+            onKeyDown={e => e.key === 'Enter' && !loading && startJob()}
+            placeholder="e.g. 823 patent"
+            disabled={loading}
+            style={{
+              width: '100%',
+              padding: '0.6rem 0.9rem',
+              borderRadius: 8,
+              border: '1px solid #ccc',
+              fontSize: '1rem',
+              outline: 'none',
+              background: loading ? '#f5f5f5' : '#fff',
+              boxSizing: 'border-box',
+            }}
+          />
+
+          {/* Folio contents checklist */}
+          <div style={{ marginTop: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+              <span style={{ fontWeight: 600, color: '#333' }}>Include in folio</span>
+              <button
+                onClick={toggleAll}
+                disabled={loading}
+                style={{
+                  background: 'none', border: 'none', padding: 0,
+                  fontSize: '0.8rem', color: '#2980b9', cursor: loading ? 'default' : 'pointer',
+                  opacity: loading ? 0.5 : 1,
+                }}
+              >
+                {selectedItems.size === ALL_KEYS.length ? 'Deselect all' : 'Select all'}
+              </button>
+            </div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: '0.3rem 1rem',
+            }}>
+              {FOLIO_ITEMS.map(({ key, label }) => (
+                <label
+                  key={key}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                    fontSize: '0.88rem', color: loading ? '#aaa' : '#444',
+                    cursor: loading ? 'default' : 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedItems.has(key)}
+                    onChange={() => !loading && toggleItem(key)}
+                    disabled={loading}
+                    style={{ width: 15, height: 15, accentColor: '#2c3e50', cursor: loading ? 'default' : 'pointer' }}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* Error */}
@@ -225,8 +334,8 @@ export default function PatentFolioPage() {
             )}
 
             <div style={{ marginBottom: '1rem', fontSize: '0.85rem', color: '#555' }}>
-              <strong>ZIP contains:</strong> patent.docx · claims.docx · claim-chart.docx ·
-              file-history-summary.docx · patent-family.docx · patent PDF · substantive file history PDFs
+              <strong>ZIP contains:</strong> patent-text.docx · claims.docx · claim-chart-template.docx ·
+              file-history-summary.docx · patent-family.xlsx · patent PDF · file-history.pdf
             </div>
 
             <div style={{ display: 'flex', gap: '0.75rem' }}>

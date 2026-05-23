@@ -9,6 +9,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda'
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs'
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2'
 import * as integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations'
+import * as ssm from 'aws-cdk-lib/aws-ssm'
 import { Construct } from 'constructs'
 import * as path from 'path'
 
@@ -231,9 +232,9 @@ function handler(event) {
       bundling: { minify: false },
       environment: {
         PATENT_OUTPUT_BUCKET: patentOutputBucket.bucketName,
-        USPTO_ODP_KEY:        process.env.USPTO_ODP_KEY ?? '',
-        EPO_OPS_KEY:          process.env.EPO_OPS_KEY ?? '',
-        EPO_OPS_SECRET:       process.env.EPO_OPS_SECRET ?? '',
+        USPTO_ODP_KEY:        ssm.StringParameter.valueForStringParameter(this, '/telecom-hub/uspto-odp-key'),
+        EPO_OPS_KEY:          ssm.StringParameter.valueForStringParameter(this, '/telecom-hub/epo-ops-key'),
+        EPO_OPS_SECRET:       ssm.StringParameter.valueForStringParameter(this, '/telecom-hub/epo-ops-secret'),
       },
     })
     patentOutputBucket.grantReadWrite(patentWorkerFn)
