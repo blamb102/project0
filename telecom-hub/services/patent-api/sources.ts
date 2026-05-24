@@ -463,6 +463,45 @@ export async function fetchFileHistoryDoc(doc: FileHistoryDoc): Promise<Buffer |
   }
 }
 
+// ── USPTO ODP — Assignment history ───────────────────────────────────────────
+
+export interface AssignmentRecord {
+  recordedDate: string
+  conveyance:   string
+  reelFrame:    string
+  assignors:    string[]
+  assignees:    Array<{ name: string; city: string; country: string }>
+}
+
+export async function fetchAssignmentHistory(appNumber: string): Promise<AssignmentRecord[]> {
+  const clean  = appNumber.replace(/[^0-9]/g, '')
+  const apiKey = process.env.USPTO_ODP_KEY ?? ''
+  try {
+    const res = await fetch(`${ODP_BASE}/patent/applications/${clean}/assignment`, {
+      headers: { 'x-api-key': apiKey, Accept: 'application/json' },
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!res.ok) return []
+    const data: any = await res.json()
+    const bag: any[] = (data.patentFileWrapperDataBag ?? [])[0]?.assignmentBag ?? []
+    return bag
+      .map((a: any): AssignmentRecord => ({
+        recordedDate: a.assignmentRecordedDate ?? '',
+        conveyance:   a.conveyanceText ?? '',
+        reelFrame:    a.reelAndFrameNumber ?? '',
+        assignors:    (a.assignorBag ?? []).map((x: any) => x.assignorName ?? '').filter(Boolean),
+        assignees:    (a.assigneeBag ?? []).map((x: any) => ({
+          name:    x.assigneeNameText ?? '',
+          city:    x.assigneeAddress?.cityName ?? '',
+          country: x.assigneeAddress?.countryName ?? '',
+        })),
+      }))
+      .sort((a, b) => a.recordedDate.localeCompare(b.recordedDate))
+  } catch {
+    return []
+  }
+}
+
 // ── EPO OPS — patent family ───────────────────────────────────────────────────
 
 let epoToken: string | null = null
