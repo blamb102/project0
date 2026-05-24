@@ -16,6 +16,7 @@ const FOLIO_ITEMS = [
   { key: 'fileHistorySummary', label: 'File history summary (DOCX)' },
   { key: 'patentFamily',       label: 'Patent family (Excel)' },
   { key: 'fileHistoryPdf',     label: 'File history PDF' },
+  { key: 'familyTree',         label: 'Family tree (SVG)' },
 ]
 const ALL_KEYS = FOLIO_ITEMS.map(i => i.key)
 
@@ -24,6 +25,7 @@ interface JobStatus {
   step?: string
   error?: string
   downloadUrl?: string
+  standalone?: boolean
   patent?: {
     number: string
     title: string
@@ -63,8 +65,10 @@ export default function PatentFolioPage() {
   const [pollTimer, setPollTimer] = useState<ReturnType<typeof setInterval> | null>(null)
 
   async function startJob() {
-    const clean = patentNumber.trim()
-    if (!clean) return
+    const raw = patentNumber.trim()
+    if (!raw) return
+    const patentNumbers = raw.split(';').map(s => s.trim()).filter(Boolean)
+    if (patentNumbers.length === 0) return
     setError(null)
     setStatus(null)
     setJobId(null)
@@ -75,9 +79,9 @@ export default function PatentFolioPage() {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
-          patentNumber: clean,
-          nickname:     nickname.trim() || undefined,
-          items:        [...selectedItems],
+          patentNumbers,
+          nickname: nickname.trim() || undefined,
+          items:    [...selectedItems],
         }),
       })
       const data = await res.json()
@@ -161,7 +165,7 @@ export default function PatentFolioPage() {
               value={patentNumber}
               onChange={e => setPatentNumber(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && !loading && startJob()}
-              placeholder="e.g. 11,234,567 or 17/123456"
+              placeholder="e.g. 11,234,567 or 17/123456; 18/345678"
               disabled={loading}
               style={{
                 flex: 1,
@@ -193,7 +197,8 @@ export default function PatentFolioPage() {
             </button>
           </div>
           <p style={{ fontSize: '0.8rem', color: '#888', marginTop: '0.4rem' }}>
-            Accepts formats: 11234567, 11,234,567, US11234567B2, 17/123456, 17123456
+            Accepts formats: 11234567, 11,234,567, US11234567B2, 17/123456, 17123456.
+            Separate multiple patents with semicolons.
           </p>
 
           <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.5rem', marginTop: '1rem', color: '#333' }}>
@@ -333,10 +338,12 @@ export default function PatentFolioPage() {
               </div>
             )}
 
-            <div style={{ marginBottom: '1rem', fontSize: '0.85rem', color: '#555' }}>
-              <strong>ZIP contains:</strong> patent-text.docx · claims.docx · claim-chart-template.docx ·
-              file-history-summary.docx · patent-family.xlsx · patent PDF · file-history.pdf
-            </div>
+            {!status.standalone && (
+              <div style={{ marginBottom: '1rem', fontSize: '0.85rem', color: '#555' }}>
+                <strong>ZIP contains:</strong> patent-text.docx · claims.docx · claim-chart-template.docx ·
+                file-history-summary.docx · patent-family.xlsx · patent PDF · file-history.pdf
+              </div>
+            )}
 
             <div style={{ display: 'flex', gap: '0.75rem' }}>
               <a
@@ -352,7 +359,7 @@ export default function PatentFolioPage() {
                   fontSize: '0.95rem',
                 }}
               >
-                Download ZIP
+                {status.standalone ? 'Download' : 'Download ZIP'}
               </a>
               <button
                 onClick={reset}
@@ -400,6 +407,7 @@ export default function PatentFolioPage() {
 const STEPS = [
   'Fetching patent data',
   'Fetching file history',
+  'Building family tree',
   'Generating documents',
   'Building ZIP',
   'Uploading ZIP',

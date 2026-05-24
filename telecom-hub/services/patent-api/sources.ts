@@ -570,3 +570,237 @@ export async function fetchPatentFamily(patentNumber: string): Promise<PatentFam
     return { members: [] }
   }
 }
+
+// ── USPTO ODP — US prosecution continuity family tree ─────────────────────────
+
+export interface FamilyTreeNode {
+  appNumber: string
+  filingDate: string
+  effectiveFilingDate: string
+  grantDate: string
+  patentNumber: string
+  publicationNumber: string
+  status: string
+  applicationType: string  // PROVSNL | REGULAR | REEXAM | DESIGN | …
+  firstInventor: string
+  isPriority: boolean
+  priorityCountry?: string
+}
+
+export interface FamilyTreeEdge {
+  source: string
+  target: string
+  relation: string  // CON | CIP | DIV | PRO | …
+}
+
+export interface FamilyTreeData {
+  nodes: FamilyTreeNode[]
+  edges: FamilyTreeEdge[]
+  rootApp: string
+}
+
+const TREE_FIELDS: Record<string, string[]> = {
+  appNumber:           ['applicationnumbertext'],
+  filingDate:          ['filingdate'],
+  effectiveFilingDate: ['effectivefilingdate'],
+  grantDate:           ['grantdate'],
+  patentNumber:        ['patentnumber'],
+  publicationNumber:   ['publicationsequencenumber', 'publicationnumber'],
+  status:              ['applicationstatusdescriptiontext', 'applicationstatus'],
+  applicationType:     ['applicationtypecategory'],
+  firstInventor:       ['firstinventorname'],
+}
+
+function treeVal(obj: any, keys: string[]): string {
+  if (!obj || typeof obj !== 'object') return ''
+  if (Array.isArray(obj)) {
+    for (const item of obj) { const r = treeVal(item, keys); if (r) return r }
+    return ''
+  }
+  for (const [k, v] of Object.entries(obj)) {
+    if (keys.includes(k.toLowerCase())) return String(v ?? '')
+    const r = treeVal(v, keys); if (r) return r
+  }
+  return ''
+}
+
+function extractTreeMeta(json: any): Omit<FamilyTreeNode, 'isPriority'> {
+  const get = (f: string) => treeVal(json, TREE_FIELDS[f] ?? [])
+  return {
+    appNumber:           get('appNumber'),
+    filingDate:          get('filingDate'),
+    effectiveFilingDate: get('effectiveFilingDate'),
+    grantDate:           get('grantDate'),
+    patentNumber:        get('patentNumber'),
+    publicationNumber:   get('publicationNumber'),
+    status:              get('status'),
+    applicationType:     get('applicationType'),
+    firstInventor:       get('firstInventor'),
+  }
+}
+
+// USPTO ODP returns PCT numbers as "PCTUS2008072352" (no slashes) in JSON bodies,
+// but also accepts the slash form "PCT/US2008/072352" in URL paths.
+// Canonical internal form: "PCT/CCYYYY/NNNNNN" (six-digit zero-padded sequence).
+function normalizePct(cc: string, yr: string, seq: string): string {
+  return `PCT/${cc.toUpperCase()}${yr}/${seq.padStart(6, '0')}`
+}
+
+function normalizeAppNum(raw: string): string {
+  const str = String(raw ?? '').trim()
+  // With slashes: PCT/US2008/072352 or PCT/US/2008/072352
+  const s = str.match(/^PCT\/([A-Z]{2})\/?(\d{4})\/(\d+)$/i)
+  if (s) return normalizePct(s[1], s[2], s[3])
+  // Without slashes: PCTUS2008072352
+  const n = str.match(/^PCT([A-Z]{2})(\d{4})(\d{4,7})$/i)
+  if (n) return normalizePct(n[1], n[2], n[3])
+  return str.replace(/\D/g, '')
+}
+
+function isPctApp(num: string): boolean {
+  return num.startsWith('PCT/')
+}
+
+function parseContinuity(
+  appNo: string,
+  json: any,
+): {
+  parentEdges:  FamilyTreeEdge[]
+  childEntries: Array<{ appNum: string; rel: string }>
+  pctDates:     Map<string, string>
+} {
+  const parentEdges:  FamilyTreeEdge[] = []
+  const childEntries: Array<{ appNum: string; rel: string }> = []
+  const pctDates = new Map<string, string>()
+
+  const bags: any[] = Array.isArray(json?.patentFileWrapperDataBag)
+    ? json.patentFileWrapperDataBag
+    : json?.patentFileWrapperDataBag ? [json.patentFileWrapperDataBag] : []
+
+  for (const bag of bags) {
+    if (!bag || typeof bag !== 'object') continue
+
+    const asList = (x: any): any[] => Array.isArray(x) ? x : x ? [x] : []
+
+    for (const rec of asList(bag.parentContinuityBag)) {
+      const parent = normalizeAppNum(rec?.parentApplicationNumberText ?? '')
+      const child  = normalizeAppNum(rec?.childApplicationNumberText  ?? '')
+      const rel    = String(rec?.claimParentageTypeCode ?? 'UNKNOWN').trim().toUpperCase()
+      if (parent && child === appNo) {
+        parentEdges.push({ source: parent, target: child, relation: rel })
+        if (isPctApp(parent)) {
+          const fd = String(rec?.parentFilingDate ?? rec?.parentPatentApplicationFilingDate ?? '')
+          if (fd) pctDates.set(parent, fd)
+        }
+      }
+    }
+
+    for (const rec of asList(bag.childContinuityBag)) {
+      const parent = normalizeAppNum(rec?.parentApplicationNumberText ?? '')
+      const child  = normalizeAppNum(rec?.childApplicationNumberText  ?? '')
+      const rel    = String(rec?.claimParentageTypeCode ?? 'UNKNOWN').trim().toUpperCase()
+      if (child && parent === appNo) {
+        childEntries.push({ appNum: child, rel })
+        if (isPctApp(child)) {
+          const fd = String(rec?.childFilingDate ?? rec?.childPatentApplicationFilingDate ?? '')
+          if (fd) pctDates.set(child, fd)
+        }
+      }
+    }
+  }
+
+  return { parentEdges, childEntries, pctDates }
+}
+
+function blankNode(appNumber: string, applicationType = ''): FamilyTreeNode {
+  return {
+    appNumber, filingDate: '', effectiveFilingDate: '', grantDate: '',
+    patentNumber: '', publicationNumber: '', status: 'Unknown',
+    applicationType, firstInventor: '', isPriority: false,
+  }
+}
+
+function pctStubNode(pctNum: string, filingDate: string): FamilyTreeNode {
+  return { ...blankNode(pctNum, 'PCT'), filingDate, status: 'Filed' }
+}
+
+export async function fetchFamilyTreeData(rootAppNumber: string): Promise<FamilyTreeData> {
+  const apiKey  = process.env.USPTO_ODP_KEY ?? ''
+  const APP_BASE = `${ODP_BASE}/patent/applications`
+  const MAX_NODES = 1000
+
+  const nodeMap = new Map<string, FamilyTreeNode>()
+  const edgeSet = new Set<string>()  // "source|target|relation"
+  const queue   = [rootAppNumber.replace(/\D/g, '')]
+  const seen    = new Set<string>()
+
+  while (queue.length > 0 && nodeMap.size < MAX_NODES) {
+    const app = queue.shift()!
+    if (!app || seen.has(app)) continue
+    seen.add(app)
+
+    // Fetch meta-data and continuity in parallel
+    const [metaRes, contRes] = await Promise.all([
+      fetch(`${APP_BASE}/${app}/meta-data`, {
+        headers: { 'x-api-key': apiKey, Accept: 'application/json' },
+        signal: AbortSignal.timeout(15_000),
+      }).catch(() => null),
+      fetch(`${APP_BASE}/${app}/continuity`, {
+        headers: { 'x-api-key': apiKey, Accept: 'application/json' },
+        signal: AbortSignal.timeout(15_000),
+      }).catch(() => null),
+    ])
+
+    // Hydrate node
+    if (metaRes?.ok) {
+      try {
+        const meta     = extractTreeMeta(await metaRes.json())
+        const canonical = (meta.appNumber || app).replace(/\D/g, '') || app
+        nodeMap.set(canonical, { ...meta, appNumber: canonical, isPriority: false })
+      } catch { nodeMap.set(app, blankNode(app)) }
+    } else { nodeMap.set(app, blankNode(app)) }
+
+    // Walk continuity edges
+    if (contRes?.ok) {
+      try {
+        const { parentEdges, childEntries, pctDates } = parseContinuity(app, await contRes.json())
+
+        for (const e of parentEdges) {
+          edgeSet.add(`${e.source}|${e.target}|${e.relation}`)
+          if (!seen.has(e.source)) {
+            if (isPctApp(e.source)) {
+              // Create a stub node; don't queue — no USPTO metadata endpoint for PCT apps
+              if (!nodeMap.has(e.source)) {
+                nodeMap.set(e.source, pctStubNode(e.source, pctDates.get(e.source) ?? ''))
+              }
+              seen.add(e.source)
+            } else {
+              queue.push(e.source)
+            }
+          }
+        }
+
+        for (const { appNum, rel } of childEntries) {
+          if (isPctApp(appNum)) {
+            edgeSet.add(`${app}|${appNum}|${rel}`)
+            if (!nodeMap.has(appNum)) {
+              nodeMap.set(appNum, pctStubNode(appNum, pctDates.get(appNum) ?? ''))
+            }
+            seen.add(appNum)
+          } else if (!seen.has(appNum)) {
+            queue.push(appNum)
+          }
+        }
+      } catch { /* skip */ }
+    }
+
+    // 150 ms between nodes — matches the Python rate-limit delay
+    await new Promise(r => setTimeout(r, 150))
+  }
+
+  return {
+    nodes:   [...nodeMap.values()],
+    edges:   [...edgeSet].map(s => { const [source, target, relation] = s.split('|'); return { source, target, relation } }),
+    rootApp: rootAppNumber,
+  }
+}
