@@ -353,10 +353,37 @@ export async function fetchPatentWithClaims(
     }
 
     const rawClaims: any[] = d.claims ?? d.claimText ?? []
-    const claims = (Array.isArray(rawClaims) ? rawClaims : [])
+    let claims = (Array.isArray(rawClaims) ? rawClaims : [])
       .sort((a: any, b: any) => Number(a.claimNumber ?? a.number ?? 0) - Number(b.claimNumber ?? b.number ?? 0))
       .map((c: any) => c.claimText ?? c.text ?? c.claimStatement ?? '')
       .filter(Boolean)
+
+    // Older patents don't include claims in the JSON — fetch the grant XML instead
+    if (claims.length === 0) {
+      const xmlAppNum = patent.appNumber || appNumber
+      if (xmlAppNum) {
+        try {
+          const appRes = await fetch(`${ODP_BASE}/patent/applications/${xmlAppNum}`, {
+            headers: { 'x-api-key': apiKey, Accept: 'application/json' },
+            signal: AbortSignal.timeout(20_000),
+          }).catch(() => null)
+          if (appRes?.ok) {
+            const appData: any = await appRes.json()
+            const wrapper = (appData.patentFileWrapperDataBag ?? [])[0] ?? {}
+            const xmlUrl  = wrapper.grantDocumentMetaData?.fileLocationURI ?? ''
+            if (xmlUrl) {
+              const { abstract: xa, description: xd, claims: xc } =
+                await fetchGrantXmlContent(xmlUrl, apiKey)
+              if (xc.length > 0) {
+                if (!patent.abstract)     patent.abstract     = xa
+                if (!patent.description)  patent.description  = xd
+                claims = xc
+              }
+            }
+          }
+        } catch { /* silent */ }
+      }
+    }
 
     return { patent, claims }
   } catch {
@@ -468,15 +495,20 @@ export async function fetchPatentFamily(patentNumber: string): Promise<PatentFam
     const token  = await getEpoToken()
     const clean  = patentNumber.replace(/[^0-9A-Za-z]/g, '')
     // /biblio causes 413 for large families (hundreds of members) — use plain family endpoint
-    const url = `https://ops.epo.org/3.2/rest-services/family/publication/docdb/US.${clean}.B2`
+    const epoBase = 'https://ops.epo.org/3.2/rest-services/family/publication/docdb'
+    const epoHeaders = { Authorization: `Bearer ${token}`, Accept: 'application/json' }
 
-    const res = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept:        'application/json',
-      },
+    let res = await fetch(`${epoBase}/US.${clean}.B2`, {
+      headers: epoHeaders,
       signal: AbortSignal.timeout(15_000),
     })
+    // Older US patents use B1 kind code (issued before ~2001) — try as fallback
+    if (!res.ok) {
+      res = await fetch(`${epoBase}/US.${clean}.B1`, {
+        headers: epoHeaders,
+        signal: AbortSignal.timeout(15_000),
+      })
+    }
     if (!res.ok) return { members: [] }
 
     const data: any = await res.json()
@@ -521,28 +553,23 @@ export async function fetchPatentFamily(patentNumber: string): Promise<PatentFam
         }
       }
 
-      // Capture US application number for the top-level usAppNumber field
-      if (isUsGrant && !usAppNumber) {
-        for (const ref of appDocIds) {
-          const country = ref['country']?.['$'] ?? ref['country'] ?? ''
-          const rawNum  = ref['doc-number']?.['$'] ?? ref['doc-number'] ?? ''
-          if (country === 'US' && rawNum) {
-            const digits = rawNum.replace(/[^0-9]/g, '')
-            usAppNumber  = digits.length >= 12 ? digits.slice(4) : digits
-            break
-          }
-        }
-      }
     }
 
-    // Fallback: if family gave no US app number, try published-data for this specific publication
-    if (!usAppNumber) {
-      const pdUrl = `https://ops.epo.org/3.2/rest-services/published-data/publication/docdb/US.${clean}.B2/biblio`
-      const pdRes = await fetch(pdUrl, {
-        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-        signal: AbortSignal.timeout(15_000),
+    // The family endpoint's DOCDB application reference uses EPO's internal numbering for older
+    // patents — not the USPTO application number. Always fetch the biblio endpoint instead, which
+    // includes an 'original' doc-type that carries the exact USPTO app number (e.g. "11399827").
+    // Try B2 first (post-2001 US grants), fall back to B1 (older grants).
+    const biBase = 'https://ops.epo.org/3.2/rest-services/published-data/publication/docdb'
+    let pdRes: Response | null = await fetch(`${biBase}/US.${clean}.B2/biblio`, {
+      headers: epoHeaders, signal: AbortSignal.timeout(15_000),
+    }).catch(() => null)
+    if (!pdRes?.ok) {
+      pdRes = await fetch(`${biBase}/US.${clean}.B1/biblio`, {
+        headers: epoHeaders, signal: AbortSignal.timeout(15_000),
       }).catch(() => null)
-      if (pdRes?.ok) {
+    }
+    if (pdRes?.ok) {
+      try {
         const pdData: any = await pdRes.json()
         const doc    = pdData?.['ops:world-patent-data']?.['exchange-documents']?.['exchange-document']
         const docArr: any[] = Array.isArray(doc) ? doc : doc ? [doc] : []
@@ -550,19 +577,29 @@ export async function fetchPatentFamily(patentNumber: string): Promise<PatentFam
           const appRef    = d?.['bibliographic-data']?.['application-reference']
           const appDocId  = appRef?.['document-id']
           const appDocIds: any[] = Array.isArray(appDocId) ? appDocId : appDocId ? [appDocId] : []
+          // Prefer 'original' type — gives the exact USPTO app number without transformation
           for (const ref of appDocIds) {
-            if (ref['@document-id-type'] !== 'docdb' && ref['@doc-id-type'] !== 'docdb') continue
-            const country = ref['country']?.['$'] ?? ref['country'] ?? ''
-            const rawNum  = ref['doc-number']?.['$'] ?? ref['doc-number'] ?? ''
-            if (country === 'US' && rawNum) {
-              const digits = rawNum.replace(/[^0-9]/g, '')
-              usAppNumber  = digits.length >= 12 ? digits.slice(4) : digits
-              break
+            if ((ref['@document-id-type'] ?? ref['@doc-id-type']) === 'original') {
+              const rawNum = ref['doc-number']?.['$'] ?? ref['doc-number'] ?? ''
+              if (rawNum) { usAppNumber = rawNum.replace(/[^0-9]/g, ''); break }
+            }
+          }
+          // Fall back to 'docdb' (works for newer patents where DOCDB = USPTO app number)
+          if (!usAppNumber) {
+            for (const ref of appDocIds) {
+              if (ref['@document-id-type'] !== 'docdb' && ref['@doc-id-type'] !== 'docdb') continue
+              const country = ref['country']?.['$'] ?? ref['country'] ?? ''
+              const rawNum  = ref['doc-number']?.['$'] ?? ref['doc-number'] ?? ''
+              if (country === 'US' && rawNum) {
+                const digits = rawNum.replace(/[^0-9]/g, '')
+                usAppNumber  = digits.length >= 12 ? digits.slice(4) : digits
+                break
+              }
             }
           }
           if (usAppNumber) break
         }
-      }
+      } catch { /* silent */ }
     }
 
     return { members, usAppNumber }

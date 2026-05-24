@@ -274,15 +274,17 @@ async function processOnePatent(
 
   await setStatus(jobId, { status: 'running', step: `Fetching patent data${stepSuffix}` })
 
-  const family     = await fetchPatentFamily(patNum)
-  const appNumHint = family.usAppNumber
+  // EPO family must resolve first — its usAppNumber (from the biblio 'original' doc-type)
+  // is the only reliable source of the USPTO application number for both old and new patents.
+  // The ODP grant endpoint (/patent/{number}) returns 403 with this key, so fetchPatentWithClaims
+  // always falls through to the applications-endpoint fallback which needs the app number.
+  const family = await fetchPatentFamily(patNum)
+  const appNum = family.usAppNumber || cleanDigits
 
   const needsHistory = needs('fileHistorySummary', 'fileHistoryPdf')
   const [{ patent, claims }, history] = await Promise.all([
-    fetchPatentWithClaims(patNum, appNumHint),
-    needsHistory
-      ? fetchFileHistory(appNumHint ?? cleanDigits)
-      : Promise.resolve([] as import('./sources').FileHistoryDoc[]),
+    fetchPatentWithClaims(patNum, appNum),
+    needsHistory ? fetchFileHistory(appNum) : Promise.resolve([] as import('./sources').FileHistoryDoc[]),
   ])
   patent.claims = claims
 
@@ -292,7 +294,7 @@ async function processOnePatent(
   let familyTreeKey: string | undefined
   if (needs('familyTree')) {
     await setStatus(jobId, { status: 'running', step: `Building family tree${stepSuffix}` })
-    const treeData = await fetchFamilyTreeData(appNumHint ?? cleanDigits)
+    const treeData = await fetchFamilyTreeData(appNum)
     familyTreeSvg  = buildFamilyTreeSvg(treeData)
     // Upload SVG separately so the test/preview page can display it
     familyTreeKey  = `jobs/${jobId}/family-tree.svg`
