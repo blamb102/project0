@@ -5,8 +5,8 @@ import { Workbook as ExcelWorkbook } from 'exceljs'
 import {
   fetchPatentWithClaims, fetchPatentPdf,
   fetchFileHistory, fetchFileHistoryDoc, fetchPatentFamily,
-  fetchFamilyTreeData,
-  FileHistoryDoc, PatentData, FamilyMember, FamilyTreeData,
+  fetchFamilyTreeData, fetchAssignmentHistory,
+  FileHistoryDoc, PatentData, FamilyMember, FamilyTreeData, AssignmentRecord,
 } from './sources'
 import {
   buildPatentDoc, buildClaimsDoc, buildClaimChartDoc,
@@ -199,6 +199,7 @@ interface PatentResult {
   fhPdfBuffer:   Buffer | null
   historyCount:  number
   familyCount:   number
+  assignments:   AssignmentRecord[]
 }
 
 // File naming per item type
@@ -281,10 +282,12 @@ async function processOnePatent(
   const family = await fetchPatentFamily(patNum)
   const appNum = family.usAppNumber || cleanDigits
 
-  const needsHistory = needs('fileHistorySummary', 'fileHistoryPdf')
-  const [{ patent, claims }, history] = await Promise.all([
+  const needsHistory     = needs('fileHistorySummary', 'fileHistoryPdf')
+  const needsAssignments = needs('fileHistorySummary')
+  const [{ patent, claims }, history, assignments] = await Promise.all([
     fetchPatentWithClaims(patNum, appNum),
-    needsHistory ? fetchFileHistory(appNum) : Promise.resolve([] as import('./sources').FileHistoryDoc[]),
+    needsHistory     ? fetchFileHistory(appNum)        : Promise.resolve([] as import('./sources').FileHistoryDoc[]),
+    needsAssignments ? fetchAssignmentHistory(appNum)  : Promise.resolve([] as import('./sources').AssignmentRecord[]),
   ])
   patent.claims = claims
 
@@ -309,7 +312,7 @@ async function processOnePatent(
     needs('patentText')         ? buildPatentDoc(patent)                          : null,
     needs('claims')             ? buildClaimsDoc(patent, claims)                  : null,
     needs('claimChart')         ? buildClaimChartDoc(patent, claims)              : null,
-    needs('fileHistorySummary') ? buildFileHistorySummaryDoc(patent, history, '') : null,
+    needs('fileHistorySummary') ? buildFileHistorySummaryDoc(patent, history, '', nick, assignments) : null,
     needs('patentFamily')       ? buildFamilyExcel(patent, family.members)        : null,
   ])
 
@@ -321,6 +324,7 @@ async function processOnePatent(
     familyXlsx, familyTreeSvg, familyTreeKey, fhPdfBuffer,
     historyCount: history.length,
     familyCount:  family.members.length,
+    assignments,
   }
 }
 
