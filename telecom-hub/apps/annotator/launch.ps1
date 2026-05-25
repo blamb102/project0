@@ -1,9 +1,22 @@
-# $PSScriptRoot is set when run as a file; $env:ANNOTATOR_ROOT is the fallback
-# when invoked via Invoke-Expression from the bat launcher (bypasses GPO AllSigned)
+# $PSScriptRoot is set when run as a file; fall back to env var when
+# invoked via Invoke-Expression from launch.bat (bypasses GPO AllSigned).
 $root = if ($PSScriptRoot) { $PSScriptRoot } else { $env:ANNOTATOR_ROOT }
-$port = 3004
 
-# Find a free port starting at 3004
+# Support both layouts:
+#   layout A (correct): launch.bat + index.html in the same folder
+#   layout B (common mistake): launch.bat sits next to the out/ folder
+if (-not (Test-Path (Join-Path $root 'index.html'))) {
+    $candidate = Join-Path $root 'out'
+    if (Test-Path (Join-Path $candidate 'index.html')) {
+        $root = $candidate
+    } else {
+        Write-Error "Cannot find index.html under $root"
+        Read-Host "Press Enter to exit"
+        exit 1
+    }
+}
+
+$port = 3004
 while ($true) {
     try {
         $listener = [System.Net.HttpListener]::new()
@@ -12,14 +25,15 @@ while ($true) {
         break
     } catch {
         $port++
-        if ($port -gt 3020) { Write-Error "No free port found"; exit 1 }
+        if ($port -gt 3020) { Write-Error "No free port found"; Read-Host; exit 1 }
     }
 }
 
-Start-Process "msedge" "--app=http://localhost:$port/"
-
-Write-Host "Patent Figure Annotator running at http://localhost:$port/"
+Write-Host "Serving from : $root"
+Write-Host "Annotator URL: http://localhost:$port/"
 Write-Host "Close this window to stop the server."
+
+Start-Process "msedge" "--app=http://localhost:$port/"
 
 $mimeMap = @{
     '.html'  = 'text/html; charset=utf-8'
@@ -40,28 +54,29 @@ while ($listener.IsListening) {
     try {
         $context = $listener.GetContext()
         $urlPath = [System.Uri]::UnescapeDataString($context.Request.Url.LocalPath)
-
         if ($urlPath -eq '/' -or $urlPath -eq '') { $urlPath = '/index.html' }
 
-        $filePath = Join-Path $root ($urlPath.TrimStart('/') -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        # Use String.Replace (literal, not regex) to avoid backslash escape issues
+        $rel      = $urlPath.TrimStart('/').Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+        $filePath = Join-Path $root $rel
 
         try {
             if (Test-Path $filePath -PathType Leaf) {
                 $bytes = [System.IO.File]::ReadAllBytes($filePath)
                 $ext   = [System.IO.Path]::GetExtension($filePath).ToLower()
                 $mime  = if ($mimeMap.ContainsKey($ext)) { $mimeMap[$ext] } else { 'application/octet-stream' }
-                $context.Response.ContentType      = $mime
-                $context.Response.ContentLength64  = $bytes.Length
+                $context.Response.ContentType     = $mime
+                $context.Response.ContentLength64 = $bytes.Length
                 $context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
             } else {
-                # SPA fallback
-                $index = Join-Path $root 'index.html'
-                $bytes = [System.IO.File]::ReadAllBytes($index)
+                # SPA fallback — serve index.html for any unmatched route
+                $bytes = [System.IO.File]::ReadAllBytes((Join-Path $root 'index.html'))
                 $context.Response.ContentType     = 'text/html; charset=utf-8'
                 $context.Response.ContentLength64 = $bytes.Length
                 $context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
             }
         } catch {
+            Write-Host "500 $urlPath — $_"
             $context.Response.StatusCode = 500
         }
         $context.Response.Close()
