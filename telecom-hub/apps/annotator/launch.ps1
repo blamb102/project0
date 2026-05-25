@@ -1,4 +1,6 @@
-$root = $PSScriptRoot
+# $PSScriptRoot is set when run as a file; $env:ANNOTATOR_ROOT is the fallback
+# when invoked via Invoke-Expression from the bat launcher (bypasses GPO AllSigned)
+$root = if ($PSScriptRoot) { $PSScriptRoot } else { $env:ANNOTATOR_ROOT }
 $port = 3004
 
 # Find a free port starting at 3004
