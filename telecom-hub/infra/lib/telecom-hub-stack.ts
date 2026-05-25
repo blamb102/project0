@@ -208,6 +208,25 @@ function handler(event) {
       distributionPaths: ['/patent', '/patent/*'],
     })
 
+    new s3deploy.BucketDeployment(this, 'AnnotatorDeploy', {
+      sources: [
+        s3deploy.Source.asset(path.join(__dirname, '../../apps/annotator/out')),
+      ],
+      destinationBucket: uiBucket,
+      destinationKeyPrefix: 'annotator',
+      distribution,
+      distributionPaths: ['/annotator', '/annotator/*'],
+    })
+
+    distribution.addBehavior('/annotator/*', origins.S3BucketOrigin.withOriginAccessControl(uiBucket), {
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+      functionAssociations: [{
+        function: subdirRewriteFn,
+        eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+      }],
+    })
+
     // ── Patent folio S3 bucket (24h auto-expire) ──────────────────────────────
 
     const patentOutputBucket = new s3.Bucket(this, 'PatentOutputBucket', {

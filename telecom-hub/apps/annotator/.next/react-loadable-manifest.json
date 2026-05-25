@@ -1,0 +1,16 @@
+{
+  "app/page.tsx -> jszip": {
+    "id": 5484,
+    "files": [
+      "static/chunks/484.ed9c80e035c35d60.js"
+    ]
+  },
+  "app/page.tsx -> pptxgenjs": {
+    "id": 1279,
+    "files": [
+      "static/chunks/62a919b8.6791ae638d007932.js",
+      "static/chunks/484.ed9c80e035c35d60.js",
+      "static/chunks/325.79fb2b44bc3517d9.js"
+    ]
+  }
+}
