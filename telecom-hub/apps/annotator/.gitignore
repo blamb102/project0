@@ -1,5 +1,4 @@
 .next/
-out/
 .env.local
 node_modules/
 src-tauri/target/

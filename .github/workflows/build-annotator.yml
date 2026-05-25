@@ -43,7 +43,22 @@ jobs:
         env:
           TAURI_BUILD: '1'
 
-      - name: Build Tauri app
+      - name: Stage Edge app mode distribution
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item -Recurse out\* dist\
+          Copy-Item launch.bat dist\
+          Copy-Item launch.ps1 dist\
+
+      - name: Upload Edge app mode zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: annotator-edge-app-mode
+          path: telecom-hub/apps/annotator/dist/
+          retention-days: 30
+
+      - name: Build Tauri portable exe
         run: pnpm tauri build -- --bundles none
         env:
           TAURI_SIGNING_PRIVATE_KEY: ''
@@ -53,13 +68,4 @@ jobs:
         with:
           name: annotator-windows-portable
           path: telecom-hub/apps/annotator/src-tauri/target/release/annotator.exe
-          retention-days: 30
-
-      - name: Upload Edge app mode zip
-        uses: actions/upload-artifact@v4
-        with:
-          name: annotator-edge-app-mode
-          path: |
-            telecom-hub/apps/annotator/out/**
-            telecom-hub/apps/annotator/launch.bat
           retention-days: 30
