@@ -224,6 +224,11 @@ export default function AnnotatorPage() {
   const [dragging, setDragging]   = useState(false)
   const [showDownload, setShowDownload] = useState(false)
 
+  // Panel resize state
+  const [panelWidth, setPanelWidth]         = useState(400)
+  const [imagesColWidth, setImagesColWidth] = useState(190)
+  const resizeDragRef = useRef<{type:'col'|'panel', startX:number, startWidth:number}|null>(null)
+
   // Sync refs
   useEffect(() => { activeIdRef.current = activeImageId }, [activeImageId])
   useEffect(() => { penRadiusRef.current = penRadius }, [penRadius])
@@ -439,6 +444,24 @@ export default function AnnotatorPage() {
     }
     el.addEventListener('wheel',handler,{passive:false})
     return ()=>el.removeEventListener('wheel',handler)
+  }, [])
+
+  // ── Panel resize ──────────────────────────────────────────────────────
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      const d=resizeDragRef.current; if (!d) return
+      const delta=e.clientX-d.startX
+      if (d.type==='col') setImagesColWidth(Math.max(100,Math.min(350,d.startWidth+delta)))
+      else setPanelWidth(Math.max(260,Math.min(720,d.startWidth+delta)))
+    }
+    function onUp() {
+      resizeDragRef.current=null
+      document.body.style.cursor=''
+      document.body.style.userSelect=''
+    }
+    window.addEventListener('mousemove',onMove)
+    window.addEventListener('mouseup',onUp)
+    return ()=>{ window.removeEventListener('mousemove',onMove); window.removeEventListener('mouseup',onUp) }
   }, [])
 
   // ── Undo ──────────────────────────────────────────────────────────────
@@ -709,10 +732,10 @@ export default function AnnotatorPage() {
         )}
 
         {/* ── Left panel — two columns ── */}
-        <div style={{width:400,background:'#fff',borderRight:'1px solid #e0e0e0',display:'flex',flexDirection:'row',overflow:'hidden',flexShrink:0}}>
+        <div style={{width:panelWidth,background:'#fff',display:'flex',flexDirection:'row',overflow:'hidden',flexShrink:0}}>
 
           {/* Images column */}
-          <div style={{width:190,borderRight:'1px solid #eee',display:'flex',flexDirection:'column',overflow:'hidden'}}>
+          <div style={{width:imagesColWidth,flexShrink:0,display:'flex',flexDirection:'column',overflow:'hidden'}}>
             <div style={{padding:'0.6rem 0.7rem 0.4rem',display:'flex',alignItems:'center',justifyContent:'space-between',borderBottom:'1px solid #eee',flexShrink:0}}>
               <span style={{fontWeight:700,fontSize:'0.82rem',color:'#333'}}>Images</span>
               <button onClick={addBlankImage} style={{fontSize:'0.72rem',padding:'0.18rem 0.45rem',borderRadius:4,border:'1px solid #ccc',background:'#f5f5f5',cursor:'pointer',color:'#333'}}>+ Add</button>
@@ -738,8 +761,16 @@ export default function AnnotatorPage() {
             </div>
           </div>
 
+          {/* Inner resize handle */}
+          <div
+            onMouseDown={e=>{e.preventDefault();resizeDragRef.current={type:'col',startX:e.clientX,startWidth:imagesColWidth};document.body.style.cursor='col-resize';document.body.style.userSelect='none'}}
+            style={{width:4,flexShrink:0,cursor:'col-resize',background:'#eee',transition:'background 0.15s'}}
+            onMouseEnter={e=>(e.currentTarget.style.background='#bbb')}
+            onMouseLeave={e=>(e.currentTarget.style.background='#eee')}
+          />
+
           {/* Labels column */}
-          <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+          <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',overflow:'hidden'}}>
             <div style={{padding:'0.6rem 0.7rem 0.4rem',display:'flex',alignItems:'center',justifyContent:'space-between',borderBottom:'1px solid #eee',flexShrink:0}}>
               <span style={{fontWeight:700,fontSize:'0.82rem',color:'#333'}}>Labels</span>
               <button onClick={addLabel} style={{fontSize:'0.72rem',padding:'0.18rem 0.45rem',borderRadius:4,border:'1px solid #ccc',background:'#f5f5f5',cursor:'pointer',color:'#333'}}>+ Add</button>
@@ -783,6 +814,14 @@ export default function AnnotatorPage() {
 
           </div>
         </div>
+
+        {/* Outer panel resize handle */}
+        <div
+          onMouseDown={e=>{e.preventDefault();resizeDragRef.current={type:'panel',startX:e.clientX,startWidth:panelWidth};document.body.style.cursor='col-resize';document.body.style.userSelect='none'}}
+          style={{width:4,flexShrink:0,cursor:'col-resize',background:'#e0e0e0',transition:'background 0.15s',zIndex:1}}
+          onMouseEnter={e=>(e.currentTarget.style.background='#bbb')}
+          onMouseLeave={e=>(e.currentTarget.style.background='#e0e0e0')}
+        />
 
         {/* ── Canvas area ── */}
         <div
