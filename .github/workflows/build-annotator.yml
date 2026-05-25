@@ -1,0 +1,65 @@
+name: Build Annotator Desktop App
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'telecom-hub/apps/annotator/**'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: telecom-hub/apps/annotator
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: telecom-hub/pnpm-lock.yaml
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: telecom-hub/apps/annotator/src-tauri -> target
+
+      - name: Install dependencies
+        run: pnpm install
+        working-directory: telecom-hub
+
+      - name: Build Next.js export
+        run: pnpm build
+        env:
+          TAURI_BUILD: '1'
+
+      - name: Build Tauri app
+        run: pnpm tauri build -- --bundles none
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ''
+
+      - name: Upload portable exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: annotator-windows-portable
+          path: telecom-hub/apps/annotator/src-tauri/target/release/annotator.exe
+          retention-days: 30
+
+      - name: Upload Edge app mode zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: annotator-edge-app-mode
+          path: |
+            telecom-hub/apps/annotator/out/**
+            telecom-hub/apps/annotator/launch.bat
+          retention-days: 30

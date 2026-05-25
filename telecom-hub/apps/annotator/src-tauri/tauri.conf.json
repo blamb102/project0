@@ -9,7 +9,7 @@
     "frontendDist": "../out"
   },
   "bundle": {
-    "active": true,
+    "active": false,
     "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
@@ -20,7 +20,7 @@
     ],
     "windows": {
       "webviewInstallMode": {
-        "type": "embedBootstrapper"
+        "type": "skipInstall"
       }
     }
   },
