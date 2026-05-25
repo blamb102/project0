@@ -186,6 +186,20 @@ async function loadProjectData(id: string) {
   return {images,labels:data.labels,name:data.name,activeLabelId:data.activeLabelId,tolerance:data.tolerance,activeImageId:data.activeImageId}
 }
 
+async function exportProjectAsAnno(sp: SerializedProject) {
+  const JSZip=(await import('jszip')).default
+  const zip=new (JSZip as any)()
+  zip.file('project.json', JSON.stringify(sp))
+  const blob=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}})
+  downloadBlob(blob, `${safeName(sp.name)}.anno`)
+}
+async function importAnnoFile(file: File): Promise<SerializedProject> {
+  const JSZip=(await import('jszip')).default
+  const zip=await (JSZip as any).loadAsync(file)
+  const json=await zip.file('project.json').async('string')
+  return JSON.parse(json)
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function AnnotatorPage() {
@@ -434,7 +448,8 @@ export default function AnnotatorPage() {
   }
 
   // ── Wheel zoom ────────────────────────────────────────────────────────
-  const canvasWrapRef = useRef<HTMLDivElement>(null)
+  const canvasWrapRef  = useRef<HTMLDivElement>(null)
+  const annoInputRef   = useRef<HTMLInputElement>(null)
   useEffect(()=>{
     const el=canvasWrapRef.current; if (!el) return
     const handler=(e:WheelEvent)=>{
@@ -549,6 +564,55 @@ export default function AnnotatorPage() {
     } catch(e) {}
   }
 
+  // ── .anno import / export / archive ──────────────────────────────────
+  function getSerializedById(id: string): SerializedProject | null {
+    if (id === currentProjectId) {
+      const s = stateRef.current
+      return serializeProject(s.currentProjectId!, s.projectName, s.images, s.labels, s.activeLabelId, s.tolerance, s.activeImageId)
+    }
+    const raw = localStorage.getItem(PROJECT_KEY(id))
+    return raw ? JSON.parse(raw) : null
+  }
+  async function handleExportAnno(id: string, e: React.MouseEvent) {
+    e.stopPropagation()
+    try {
+      const sp = getSerializedById(id); if (!sp) return
+      await exportProjectAsAnno(sp)
+    } catch(err:any) { alert(`Export failed: ${err?.message??err}`) }
+  }
+  async function handleArchiveProject(id: string, e: React.MouseEvent) {
+    e.stopPropagation()
+    try {
+      const sp = getSerializedById(id); if (!sp) return
+      await exportProjectAsAnno(sp)
+      localStorage.removeItem(PROJECT_KEY(id))
+      const ni = projectsIndex.filter(p=>p.id!==id)
+      localStorage.setItem(PROJECTS_KEY, JSON.stringify(ni)); setProjectsIndex(ni)
+      if (id===currentProjectId) { if (ni.length>0) handleSwitchProject(ni[0].id); else handleNewProject() }
+    } catch(err:any) { alert(`Archive failed: ${err?.message??err}`) }
+  }
+  async function handleOpenAnno(file: File) {
+    setShowProjects(false); setLoading(true)
+    try {
+      const sp = await importAnnoFile(file)
+      const imgs: AnnotatedImage[] = []
+      for (const si of sp.images) {
+        try {
+          const baseImage = await dataUrlToImageData(si.dataUrl)
+          const regions = si.regions.map(sr=>({id:sr.id,labelId:sr.labelId,
+            pixels:floodFillPixels(baseImage.data,baseImage.width,baseImage.height,sr.seedX,sr.seedY,sr.seedTolerance),
+            seedX:sr.seedX,seedY:sr.seedY,seedTolerance:sr.seedTolerance}))
+          imgs.push({id:si.id,name:si.name,baseImage,regions,penPixels:si.penPixels??[],undoStack:[]})
+        } catch(e) {}
+      }
+      setProjectsIndex(persistProject(sp))
+      setCurrentPid(sp.id); setProjectName(sp.name); setImages(imgs)
+      setLabels(sp.labels); setActiveLabelId(sp.activeLabelId||sp.labels[0]?.id||'')
+      setTolerance(sp.tolerance); setActiveImageId(sp.activeImageId)
+    } catch(err:any) { alert(`Could not open .anno file: ${err?.message??err}`) }
+    setLoading(false)
+  }
+
   // ── Export ────────────────────────────────────────────────────────────
   async function exportCurrentPng() {
     if (!activeImage) return
@@ -625,17 +689,29 @@ export default function AnnotatorPage() {
                         <div style={{fontSize:'0.88rem',fontWeight:cur?700:400,color:'#222',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.name}</div>
                         <div style={{fontSize:'0.72rem',color:'#aaa',marginTop:1}}>{formatDate(p.updatedAt)}</div>
                       </div>
-                      <button onClick={e=>handleDeleteProject(p.id,e)} style={{background:'none',border:'none',color:'#ccc',cursor:'pointer',fontSize:'1.1rem',padding:'0 2px',lineHeight:1,flexShrink:0}}
-                        onMouseEnter={e=>(e.currentTarget.style.color='#e74c3c')} onMouseLeave={e=>(e.currentTarget.style.color='#ccc')}>×</button>
+                      <div style={{display:'flex',gap:1,flexShrink:0}} onClick={e=>e.stopPropagation()}>
+                        <button onClick={e=>handleExportAnno(p.id,e)} title="Save .anno file" style={{background:'none',border:'none',color:'#bbb',cursor:'pointer',fontSize:'0.9rem',padding:'0 3px',lineHeight:1}}
+                          onMouseEnter={e=>(e.currentTarget.style.color='#3498db')} onMouseLeave={e=>(e.currentTarget.style.color='#bbb')}>↓</button>
+                        <button onClick={e=>handleArchiveProject(p.id,e)} title="Archive: save .anno + remove from list" style={{background:'none',border:'none',color:'#bbb',cursor:'pointer',fontSize:'0.85rem',padding:'0 3px',lineHeight:1}}
+                          onMouseEnter={e=>(e.currentTarget.style.color='#f39c12')} onMouseLeave={e=>(e.currentTarget.style.color='#bbb')}>⊡</button>
+                        <button onClick={e=>handleDeleteProject(p.id,e)} title="Delete permanently" style={{background:'none',border:'none',color:'#ccc',cursor:'pointer',fontSize:'1.1rem',padding:'0 2px',lineHeight:1}}
+                          onMouseEnter={e=>(e.currentTarget.style.color='#e74c3c')} onMouseLeave={e=>(e.currentTarget.style.color='#ccc')}>×</button>
+                      </div>
                     </div>
                   )
                 })}
               </div>
               <div style={{height:1,background:'#f0f0f0'}}/>
-              <button onClick={handleNewProject} style={{display:'block',width:'100%',textAlign:'left',padding:'0.5rem 0.8rem',border:'none',background:'none',fontSize:'0.88rem',color:'#3498db',cursor:'pointer',fontWeight:600}}
-                onMouseEnter={e=>(e.currentTarget.style.background='#f0f7ff')} onMouseLeave={e=>(e.currentTarget.style.background='none')}>
-                + New Project
-              </button>
+              <div style={{display:'flex'}}>
+                <button onClick={handleNewProject} style={{flex:1,textAlign:'left',padding:'0.5rem 0.8rem',border:'none',background:'none',fontSize:'0.88rem',color:'#3498db',cursor:'pointer',fontWeight:600}}
+                  onMouseEnter={e=>(e.currentTarget.style.background='#f0f7ff')} onMouseLeave={e=>(e.currentTarget.style.background='none')}>
+                  + New Project
+                </button>
+                <button onClick={()=>annoInputRef.current?.click()} style={{textAlign:'left',padding:'0.5rem 0.8rem',border:'none',borderLeft:'1px solid #f0f0f0',background:'none',fontSize:'0.88rem',color:'#888',cursor:'pointer',fontWeight:600,whiteSpace:'nowrap' as const}}
+                  onMouseEnter={e=>(e.currentTarget.style.background='#f5f5f5')} onMouseLeave={e=>(e.currentTarget.style.background='none')}>
+                  📂 Open .anno
+                </button>
+              </div>
             </div>
           </>)}
         </div>
@@ -659,6 +735,8 @@ export default function AnnotatorPage() {
         <button onClick={()=>fileInputRef.current?.click()} style={topBtn('#2c3e50')}>Add Image</button>
         <input ref={fileInputRef} type="file" accept="image/*" multiple style={{display:'none'}}
           onChange={e=>{if(e.target.files?.length)addFiles(e.target.files);e.target.value=''}}/>
+        <input ref={annoInputRef} type="file" accept=".anno" style={{display:'none'}}
+          onChange={e=>{if(e.target.files?.[0])handleOpenAnno(e.target.files[0]);e.target.value=''}}/>
         <span style={{color:'#666',fontSize:'0.75rem'}}>or paste / drop</span>
 
         <div style={{flex:1}}/>
