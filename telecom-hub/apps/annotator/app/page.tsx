@@ -455,6 +455,19 @@ export default function AnnotatorPage() {
   }
   function renameImage(id:string,name:string) { setImages(imgs=>imgs.map(img=>img.id===id?{...img,name}:img)) }
 
+  function addBlankImage() {
+    const w=activeImage?.baseImage.width??800, h=activeImage?.baseImage.height??600
+    const c=document.createElement('canvas'); c.width=w; c.height=h
+    const ctx=c.getContext('2d')!; ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h)
+    const newImg:AnnotatedImage={id:crypto.randomUUID(),name:'Blank',baseImage:ctx.getImageData(0,0,w,h),regions:[],penPixels:[],undoStack:[]}
+    setImages(imgs=>{
+      const idx=imgs.findIndex(i=>i.id===activeImageId)
+      if (idx<0) return [...imgs,newImg]
+      const next=[...imgs]; next.splice(idx+1,0,newImg); return next
+    })
+    setActiveImageId(newImg.id)
+  }
+
   // ── Label management ──────────────────────────────────────────────────
   function addLabel() {
     const label=mkLabel(`Label ${labels.length+1}`,LABEL_COLORS[labels.length%LABEL_COLORS.length])
@@ -686,7 +699,10 @@ export default function AnnotatorPage() {
 
           {/* Images column */}
           <div style={{width:190,borderRight:'1px solid #eee',display:'flex',flexDirection:'column',overflow:'hidden'}}>
-            <div style={{padding:'0.6rem 0.7rem 0.4rem',fontWeight:700,fontSize:'0.82rem',color:'#333',borderBottom:'1px solid #eee',flexShrink:0}}>Images</div>
+            <div style={{padding:'0.6rem 0.7rem 0.4rem',display:'flex',alignItems:'center',justifyContent:'space-between',borderBottom:'1px solid #eee',flexShrink:0}}>
+              <span style={{fontWeight:700,fontSize:'0.82rem',color:'#333'}}>Images</span>
+              <button onClick={addBlankImage} style={{fontSize:'0.72rem',padding:'0.18rem 0.45rem',borderRadius:4,border:'1px solid #ccc',background:'#f5f5f5',cursor:'pointer',color:'#333'}}>+ Add</button>
+            </div>
             <div style={{overflowY:'auto',flex:1,padding:'0.35rem 0.35rem'}}>
               {images.length===0&&<div style={{color:'#c0c0c0',fontSize:'0.75rem',padding:'0.3rem 0.2rem'}}>Add images to begin.</div>}
               {images.map((img,idx)=>{
@@ -713,6 +729,14 @@ export default function AnnotatorPage() {
             <div style={{padding:'0.6rem 0.7rem 0.4rem',display:'flex',alignItems:'center',justifyContent:'space-between',borderBottom:'1px solid #eee',flexShrink:0}}>
               <span style={{fontWeight:700,fontSize:'0.82rem',color:'#333'}}>Labels</span>
               <button onClick={addLabel} style={{fontSize:'0.72rem',padding:'0.18rem 0.45rem',borderRadius:4,border:'1px solid #ccc',background:'#f5f5f5',cursor:'pointer',color:'#333'}}>+ Add</button>
+            </div>
+            {/* Tolerance */}
+            <div style={{padding:'0.45rem 0.7rem 0.5rem',borderBottom:'1px solid #eee',flexShrink:0}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}>
+                <span style={{fontSize:'0.75rem',fontWeight:600,color:'#555'}}>Fill tolerance</span>
+                <span style={{fontSize:'0.75rem',color:'#999'}}>{tolerance}</span>
+              </div>
+              <input type="range" min={0} max={128} step={4} value={tolerance} onChange={e=>setTolerance(Number(e.target.value))} style={{width:'100%'}}/>
             </div>
             <div style={{flex:1,overflowY:'auto',padding:'0.35rem 0.4rem'}}>
               {labels.map(label=>{
@@ -743,17 +767,6 @@ export default function AnnotatorPage() {
               })}
             </div>
 
-            {/* Tolerance */}
-            <div style={{padding:'0.6rem 0.7rem',borderTop:'1px solid #eee',flexShrink:0}}>
-              <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}>
-                <span style={{fontSize:'0.75rem',fontWeight:600,color:'#555'}}>Fill tolerance</span>
-                <span style={{fontSize:'0.75rem',color:'#999'}}>{tolerance}</span>
-              </div>
-              <input type="range" min={0} max={128} step={4} value={tolerance} onChange={e=>setTolerance(Number(e.target.value))} style={{width:'100%'}}/>
-              <div style={{fontSize:'0.65rem',color:'#bbb',marginTop:2}}>
-                {mode==='fill'?'Higher = fill wider color range':'Switch to Fill mode to fill regions'}
-              </div>
-            </div>
           </div>
         </div>
 
