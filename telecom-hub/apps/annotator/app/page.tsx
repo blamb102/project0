@@ -11,7 +11,7 @@ interface Region {
 }
 interface Snapshot { regions: Region[]; penPixels: number[] }
 interface AnnotatedImage {
-  id: string; name: string; baseImage: ImageData
+  id: string; name: string; baseImage?: ImageData
   regions: Region[]; penPixels: number[]; undoStack: Snapshot[]
 }
 interface ProjectMeta { id: string; name: string; updatedAt: number }
@@ -127,7 +127,9 @@ function applyCanvas(base: ImageData, regions: Region[], labelMap: Map<string,La
 }
 
 function renderImageToCanvas(img: AnnotatedImage, labelMap: Map<string,Label>): HTMLCanvasElement {
-  const c=document.createElement('canvas'); c.width=img.baseImage.width; c.height=img.baseImage.height
+  const c=document.createElement('canvas')
+  if (!img.baseImage) return c
+  c.width=img.baseImage.width; c.height=img.baseImage.height
   c.getContext('2d')!.putImageData(applyCanvas(img.baseImage,img.regions,labelMap,img.penPixels),0,0)
   return c
 }
@@ -156,7 +158,7 @@ function dataUrlToImageData(url: string): Promise<ImageData> {
 }
 function serializeProject(id:string,name:string,images:AnnotatedImage[],labels:Label[],activeLabelId:string,tolerance:number,activeImageId:string|null): SerializedProject {
   return {id,name,updatedAt:Date.now(),labels,activeLabelId,tolerance,activeImageId,
-    images:images.map(img=>({id:img.id,name:img.name,dataUrl:imageDataToDataUrl(img.baseImage),penPixels:img.penPixels,
+    images:images.filter(img=>img.baseImage).map(img=>({id:img.id,name:img.name,dataUrl:imageDataToDataUrl(img.baseImage!),penPixels:img.penPixels,
       regions:img.regions.map(r=>({id:r.id,labelId:r.labelId,seedX:r.seedX,seedY:r.seedY,seedTolerance:r.seedTolerance}))}))}
 }
 function persistProject(s: SerializedProject): ProjectMeta[] {
@@ -193,11 +195,11 @@ export default function AnnotatorPage() {
   const pixelOwnerRef  = useRef<Int32Array|null>(null)
   const activeIdRef    = useRef<string|null>(null)
   const stateRef       = useRef({images:[] as AnnotatedImage[],labels:INITIAL_LABELS,projectName:'My Project',tolerance:32,activeLabelId:INITIAL_LABELS[0].id,activeImageId:null as string|null,currentProjectId:null as string|null})
-  // Pen drawing refs
-  const isDrawingRef   = useRef(false)
-  const lastPosRef     = useRef<{x:number,y:number}|null>(null)
-  const strokePxRef    = useRef<number[]>([])
-  const penRadiusRef   = useRef(1)
+  // Line drawing refs
+  const isDrawingRef      = useRef(false)
+  const lineStartRef      = useRef<{x:number,y:number}|null>(null)
+  const canvasSnapshotRef = useRef<ImageData|null>(null)
+  const penRadiusRef      = useRef(1)
 
   // Project state
   const [projectsIndex, setProjectsIndex]     = useState<ProjectMeta[]>([])
@@ -272,7 +274,7 @@ export default function AnnotatorPage() {
   // ── Canvas render ──────────────────────────────────────────────────────
   useEffect(() => {
     if (isDrawingRef.current) return
-    const canvas=canvasRef.current; if (!canvas||!activeImage) return
+    const canvas=canvasRef.current; if (!canvas||!activeImage?.baseImage) return
     canvas.width=activeImage.baseImage.width; canvas.height=activeImage.baseImage.height
     canvas.getContext('2d')!.putImageData(applyCanvas(activeImage.baseImage,activeImage.regions,labelMap,activeImage.penPixels),0,0)
     const map=new Int32Array(canvas.width*canvas.height).fill(-1)
@@ -280,40 +282,40 @@ export default function AnnotatorPage() {
     pixelOwnerRef.current=map
   }, [activeImage,labelMap])
 
-  // ── Pen window-level handlers ─────────────────────────────────────────
-  const commitStroke = useCallback(() => {
-    isDrawingRef.current=false
-    const id=activeIdRef.current
-    const stroke=strokePxRef.current.slice(); strokePxRef.current=[]; lastPosRef.current=null
-    if (!id||!stroke.length) return
-    setImages(imgs=>imgs.map(img=>{
-      if (img.id!==id) return img
-      const snap:Snapshot={regions:img.regions,penPixels:img.penPixels}
-      return {...img,penPixels:[...img.penPixels,...stroke],undoStack:[...img.undoStack.slice(-MAX_UNDO+1),snap]}
-    }))
-  }, [])
-
+  // ── Line tool window-level handlers ──────────────────────────────────
   useEffect(() => {
     if (mode!=='pen') return
     function onMove(e: MouseEvent) {
-      if (!isDrawingRef.current||!canvasRef.current) return
+      if (!isDrawingRef.current||!lineStartRef.current||!canvasSnapshotRef.current||!canvasRef.current) return
       const canvas=canvasRef.current
       const {x,y}=getCanvasPos(canvas,e.clientX,e.clientY)
-      const last=lastPosRef.current; if (!last) { lastPosRef.current={x,y}; return }
-      if (last.x===x&&last.y===y) return
-      const r=penRadiusRef.current
-      const newPx=bresenhamLine(last.x,last.y,x,y,canvas.width,canvas.height,r)
-      strokePxRef.current.push(...newPx)
-      lastPosRef.current={x,y}
-      // Live ctx preview
       const ctx=canvas.getContext('2d')!
-      ctx.strokeStyle='#000'; ctx.lineWidth=Math.max(1,r*2+1); ctx.lineCap='round'; ctx.lineJoin='round'
-      ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(x,y); ctx.stroke()
+      // Restore snapshot to clear previous preview
+      ctx.putImageData(canvasSnapshotRef.current,0,0)
+      // Draw preview line
+      const r=penRadiusRef.current
+      ctx.strokeStyle='#000'; ctx.lineWidth=Math.max(1,r*2+1); ctx.lineCap='round'
+      ctx.beginPath(); ctx.moveTo(lineStartRef.current.x,lineStartRef.current.y); ctx.lineTo(x,y); ctx.stroke()
+    }
+    function onUp(e: MouseEvent) {
+      if (!isDrawingRef.current||!lineStartRef.current||!canvasRef.current) return
+      isDrawingRef.current=false
+      const canvas=canvasRef.current
+      const {x,y}=getCanvasPos(canvas,e.clientX,e.clientY)
+      const start=lineStartRef.current; lineStartRef.current=null; canvasSnapshotRef.current=null
+      const id=activeIdRef.current; if (!id) return
+      const pixels=bresenhamLine(start.x,start.y,x,y,canvas.width,canvas.height,penRadiusRef.current)
+      if (!pixels.length) return
+      setImages(imgs=>imgs.map(img=>{
+        if (img.id!==id) return img
+        const snap:Snapshot={regions:img.regions,penPixels:img.penPixels}
+        return {...img,penPixels:[...img.penPixels,...pixels],undoStack:[...img.undoStack.slice(-MAX_UNDO+1),snap]}
+      }))
     }
     window.addEventListener('mousemove',onMove)
-    window.addEventListener('mouseup',commitStroke)
-    return () => { window.removeEventListener('mousemove',onMove); window.removeEventListener('mouseup',commitStroke) }
-  }, [mode,commitStroke])
+    window.addEventListener('mouseup',onUp)
+    return () => { window.removeEventListener('mousemove',onMove); window.removeEventListener('mouseup',onUp) }
+  }, [mode])
 
   // ── Keyboard ─────────────────────────────────────────────────────────
   const undo = useCallback(() => {
@@ -334,10 +336,11 @@ export default function AnnotatorPage() {
 
   // ── Clipboard paste ───────────────────────────────────────────────────
   const addFiles = useCallback(async (files: FileList|File[]) => {
-    const toAdd:AnnotatedImage[]=[]
-    for (const f of Array.from(files)) {
-      if (!f.type.startsWith('image/')) continue
-      toAdd.push(await new Promise(resolve=>{
+    const toLoad=Array.from(files).filter(f=>f.type.startsWith('image/'))
+    if (!toLoad.length) return
+    const loaded:AnnotatedImage[]=[]
+    for (const f of toLoad) {
+      loaded.push(await new Promise(resolve=>{
         const url=URL.createObjectURL(f), el=new Image()
         el.onload=()=>{
           const c=document.createElement('canvas'); c.width=el.naturalWidth; c.height=el.naturalHeight
@@ -349,8 +352,21 @@ export default function AnnotatorPage() {
         el.src=url
       }))
     }
-    if (!toAdd.length) return
-    setImages(prev=>[...prev,...toAdd]); setActiveImageId(toAdd[toAdd.length-1].id)
+    // If the active slot is empty, fill it rather than appending
+    const activeId=activeIdRef.current
+    const activeSlot=stateRef.current.images.find(i=>i.id===activeId)
+    if (activeSlot&&!activeSlot.baseImage) {
+      const filled={...activeSlot,name:loaded[0].name,baseImage:loaded[0].baseImage}
+      const extras=loaded.slice(1)
+      const newActiveId=extras.length>0?extras[extras.length-1].id:filled.id
+      setImages(imgs=>{
+        const idx=imgs.findIndex(i=>i.id===activeId); if (idx<0) return [...imgs,...loaded]
+        const next=[...imgs]; next[idx]=filled; next.splice(idx+1,0,...extras); return next
+      })
+      setActiveImageId(newActiveId)
+    } else {
+      setImages(prev=>[...prev,...loaded]); setActiveImageId(loaded[loaded.length-1].id)
+    }
   }, [])
 
   useEffect(() => {
@@ -371,7 +387,7 @@ export default function AnnotatorPage() {
 
   // ── Canvas interaction ────────────────────────────────────────────────
   function handleCanvasMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
-    if (e.button!==0||!activeImage) return
+    if (e.button!==0||!activeImage?.baseImage) return
     const canvas=canvasRef.current; if (!canvas) return
     const {x,y}=getCanvasPos(canvas,e.clientX,e.clientY)
 
@@ -389,12 +405,13 @@ export default function AnnotatorPage() {
           ?{...img,regions:[...img.regions,{id:crypto.randomUUID(),labelId:activeLabelId,pixels,seedX:x,seedY:y,seedTolerance:tolerance}]}:img))
       }
     } else {
-      isDrawingRef.current=true; lastPosRef.current={x,y}; strokePxRef.current=[]
-      // Draw initial dot
-      const r=penRadius, initPx=dotsAt(x,y,canvas.width,canvas.height,r)
-      strokePxRef.current.push(...initPx)
+      // Straight line: capture snapshot and record start point
+      isDrawingRef.current=true
+      lineStartRef.current={x,y}
+      canvasSnapshotRef.current=canvas.getContext('2d')!.getImageData(0,0,canvas.width,canvas.height)
+      // Draw start dot for visual feedback
       const ctx=canvas.getContext('2d')!
-      ctx.fillStyle='#000'; ctx.beginPath(); ctx.arc(x,y,Math.max(r,0.5),0,Math.PI*2); ctx.fill()
+      ctx.fillStyle='#000'; ctx.beginPath(); ctx.arc(x,y,Math.max(penRadiusRef.current,0.5),0,Math.PI*2); ctx.fill()
     }
   }
 
@@ -456,10 +473,7 @@ export default function AnnotatorPage() {
   function renameImage(id:string,name:string) { setImages(imgs=>imgs.map(img=>img.id===id?{...img,name}:img)) }
 
   function addBlankImage() {
-    const w=activeImage?.baseImage.width??800, h=activeImage?.baseImage.height??600
-    const c=document.createElement('canvas'); c.width=w; c.height=h
-    const ctx=c.getContext('2d')!; ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h)
-    const newImg:AnnotatedImage={id:crypto.randomUUID(),name:'Blank',baseImage:ctx.getImageData(0,0,w,h),regions:[],penPixels:[],undoStack:[]}
+    const newImg:AnnotatedImage={id:crypto.randomUUID(),name:'New Image',regions:[],penPixels:[],undoStack:[]}
     setImages(imgs=>{
       const idx=imgs.findIndex(i=>i.id===activeImageId)
       if (idx<0) return [...imgs,newImg]
@@ -633,7 +647,7 @@ export default function AnnotatorPage() {
               padding:'0.3rem 0.7rem',borderRadius:4,border:'none',
               background:mode===m?'#3498db':'transparent',
               color:'#fff',fontWeight:600,fontSize:'0.8rem',cursor:'pointer',
-            }}>{m==='fill'?'⬛ Fill':'✏ Pen'}</button>
+            }}>{m==='fill'?'⬛ Fill':'╱ Line'}</button>
           ))}
         </div>
 
@@ -777,10 +791,10 @@ export default function AnnotatorPage() {
           onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
         >
           <div style={{minWidth:'100%',minHeight:'100%',display:'flex',alignItems:'center',justifyContent:'center',padding:'1rem',boxSizing:'border-box'}}>
-            {!activeImage&&!loading&&(
+            {(!activeImage||!activeImage.baseImage)&&!loading&&(
               <div style={{textAlign:'center',color:'#c0c0c0',pointerEvents:'none',userSelect:'none'}}>
                 <div style={{fontSize:'3rem',marginBottom:'0.5rem'}}>🖼</div>
-                <div style={{fontSize:'1rem',fontWeight:600}}>Add images to get started</div>
+                <div style={{fontSize:'1rem',fontWeight:600}}>{activeImage?'Drop or paste an image here':'Add images to get started'}</div>
                 <div style={{fontSize:'0.85rem',marginTop:'0.3rem'}}>
                   Click <strong style={{color:'#aaa'}}>Add Image</strong>, drop files, or paste
                 </div>
@@ -791,11 +805,11 @@ export default function AnnotatorPage() {
               onMouseDown={handleCanvasMouseDown}
               onContextMenu={handleContextMenu}
               style={{
-                display:activeImage?'block':'none', flexShrink:0,
-                width:activeImage?Math.round(activeImage.baseImage.width*zoom):undefined,
-                height:activeImage?Math.round(activeImage.baseImage.height*zoom):undefined,
+                display:activeImage?.baseImage?'block':'none', flexShrink:0,
+                width:activeImage?.baseImage?Math.round(activeImage.baseImage.width*zoom):undefined,
+                height:activeImage?.baseImage?Math.round(activeImage.baseImage.height*zoom):undefined,
                 boxShadow:'0 4px 20px rgba(0,0,0,0.18)',
-                cursor:mode==='pen'?'crosshair':'crosshair',
+                cursor:'crosshair',
                 imageRendering:zoom>2?'pixelated':'auto',
               }}
             />
@@ -806,9 +820,9 @@ export default function AnnotatorPage() {
       </div>
 
       {/* Right-click hint */}
-      {activeImage&&mode==='fill'&&(
+      {activeImage?.baseImage&&(
         <div style={{background:'#1a1a2e',color:'rgba(255,255,255,0.45)',fontSize:'0.72rem',padding:'0.25rem 1rem',textAlign:'right'}}>
-          Left-click to fill/reassign · Right-click to remove region
+          {mode==='fill'?'Left-click to fill/reassign · Right-click to remove region':'Click and drag to draw a straight line'}
         </div>
       )}
     </main>
