@@ -6,7 +6,9 @@
     "dev": "next dev -p 3003",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "next": "^15.3.2",
@@ -16,9 +18,11 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2",
     "@types/node": "^24.0.0",
     "@types/react": "^19.1.6",
     "@types/react-dom": "^19.1.5",
+    "cross-env": "^7.0.3",
     "typescript": "^5.8.3"
   }
 }
