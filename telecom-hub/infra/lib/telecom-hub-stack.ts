@@ -227,6 +227,25 @@ function handler(event) {
       }],
     })
 
+    new s3deploy.BucketDeployment(this, 'FtoAnalyzerDeploy', {
+      sources: [
+        s3deploy.Source.asset(path.join(__dirname, '../../apps/fto-analyzer/out')),
+      ],
+      destinationBucket: uiBucket,
+      destinationKeyPrefix: 'fto',
+      distribution,
+      distributionPaths: ['/fto', '/fto/*'],
+    })
+
+    distribution.addBehavior('/fto/*', origins.S3BucketOrigin.withOriginAccessControl(uiBucket), {
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+      functionAssociations: [{
+        function: subdirRewriteFn,
+        eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+      }],
+    })
+
     // ── Patent folio S3 bucket (24h auto-expire) ──────────────────────────────
 
     const patentOutputBucket = new s3.Bucket(this, 'PatentOutputBucket', {
