@@ -161,6 +161,39 @@ function nodesToText(nodes: any[]): string {
   }).join('')
 }
 
+// Render a <table> node (HTML-style tr/td or CALS-style row/entry) as
+// pipe-delimited text rows for later DOCX table construction.
+function tableToText(tableChildren: any[]): string {
+  const rows: string[] = []
+
+  function processRow(rowChildren: any[]): void {
+    const cells = rowChildren
+      .filter(c => {
+        const k = Object.keys(c).find(k => k !== ':@') ?? ''
+        return ['td', 'th', 'entry'].includes(k)
+      })
+      .map(c => {
+        const k = Object.keys(c).find(k => k !== ':@') ?? ''
+        return nodesToText(c[k] ?? []).replace(/\s+/g, ' ').trim()
+      })
+    if (cells.length) rows.push('| ' + cells.join(' | ') + ' |')
+  }
+
+  function processNode(children: any[]): void {
+    for (const child of children) {
+      const key = Object.keys(child).find(k => k !== ':@') ?? ''
+      if (key === 'tr' || key === 'row') {
+        processRow(child[key] ?? [])
+      } else if (['thead', 'tbody', 'tfoot', 'tgroup', 'table'].includes(key)) {
+        processNode(child[key] ?? [])
+      }
+    }
+  }
+
+  processNode(tableChildren)
+  return rows.join('\n')
+}
+
 // Convert the children of a <claim-text> node into indented lines.
 // Inline content (text, claim-ref, sup, sub, math, etc.) forms the preamble at `depth`.
 // Nested <claim-text> elements are recursed at depth+1.
@@ -203,7 +236,9 @@ async function fetchGrantXmlContent(
       : ''
 
     // ── Description ───────────────────────────────────────────────────────────
-    // Walk all <heading> and <p> elements inside <description>, in document order.
+    // Walk direct children of <description> in document order.
+    // <heading> → HEADING: prefix; <table> → TABLE: prefix with pipe rows;
+    // <p> and anything else with text content → plain paragraph.
     const descNode = findNode(doc, 'description')
     let description = ''
     if (descNode) {
@@ -211,13 +246,19 @@ async function fetchGrantXmlContent(
       const descChildren: any[] = descNode['description'] ?? []
       for (const child of descChildren) {
         const key = Object.keys(child).find(k => k !== ':@') ?? ''
+        if (!key) continue
         if (key === 'heading') {
           const text = nodesToText(child[key]).replace(/\s+/g, ' ').trim()
           if (text) parts.push(`HEADING: ${text}`)
-        } else if (key === 'p') {
-          const text = nodesToText(child[key]).replace(/\s+/g, ' ').trim()
-          if (!text) continue
-          parts.push(text)
+        } else if (key === 'table') {
+          const text = tableToText(child[key] ?? [])
+          if (text.trim()) parts.push('TABLE:\n' + text)
+        } else {
+          // <p>, <ul>, <ol>, <pre>, <figure>, and any other element —
+          // extract all text content; tables nested inside paragraphs are
+          // also handled because nodesToText recurses into all children.
+          const text = nodesToText(child[key] ?? []).replace(/\s+/g, ' ').trim()
+          if (text) parts.push(text)
         }
       }
       description = parts.join('\n\n')

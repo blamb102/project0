@@ -50,11 +50,15 @@ function makeMatcher(paras: PdfParagraph[]) {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function heading1(text: string): Paragraph {
-  return new Paragraph({ text, heading: HeadingLevel.HEADING_1 })
+  return new Paragraph({ text, heading: HeadingLevel.HEADING_1, outlineLevel: 0 })
 }
 
 function heading2(text: string): Paragraph {
-  return new Paragraph({ text, heading: HeadingLevel.HEADING_2 })
+  return new Paragraph({ text, heading: HeadingLevel.HEADING_2, outlineLevel: 1 })
+}
+
+function heading3(text: string): Paragraph {
+  return new Paragraph({ text, heading: HeadingLevel.HEADING_3, outlineLevel: 2 })
 }
 
 function body(text: string): Paragraph {
@@ -126,16 +130,64 @@ function makeRuns(text: string, size: number): TextRun[] {
   return runs.length ? runs : [new TextRun({ text, size })]
 }
 
+// Parse a TABLE:\n... block (pipe-delimited rows from sources.ts) into a DOCX Table.
+// The first row is treated as a header row.
+function buildDescTable(tableText: string): Table | null {
+  const lines = tableText.split('\n').filter(l => l.trim().startsWith('|'))
+  if (!lines.length) return null
+
+  const rows = lines.map(line =>
+    line.split('|').slice(1, -1).map(c => c.trim())
+  ).filter(r => r.length > 0)
+  if (!rows.length) return null
+
+  const colCount = Math.max(...rows.map(r => r.length))
+  const colW     = Math.floor(9360 / colCount)
+
+  const tableRows = rows.map((cells, ri) =>
+    new TableRow({
+      tableHeader: ri === 0,
+      children: Array.from({ length: colCount }, (_, ci) =>
+        new TableCell({
+          children: [new Paragraph({
+            children: [new TextRun({ text: cells[ci] ?? '', size: 18, bold: ri === 0 })],
+          })],
+          width:   { size: colW, type: WidthType.DXA },
+          shading: ri === 0
+            ? { type: ShadingType.CLEAR, color: 'E8E8E8', fill: 'E8E8E8' }
+            : undefined,
+          borders: {
+            top:    { style: BorderStyle.SINGLE, size: 4 },
+            bottom: { style: BorderStyle.SINGLE, size: 4 },
+            left:   { style: BorderStyle.SINGLE, size: 4 },
+            right:  { style: BorderStyle.SINGLE, size: 4 },
+          },
+        })
+      ),
+    })
+  )
+
+  return new Table({
+    rows: tableRows,
+    width:        { size: 9360, type: WidthType.DXA },
+    columnWidths: Array(colCount).fill(colW),
+    layout:       TableLayoutType.FIXED,
+  })
+}
+
 // ── Patent specification document ─────────────────────────────────────────────
 
 export async function buildPatentDoc(patent: PatentData, pdfParas?: PdfParagraph[]): Promise<Buffer> {
   const match = pdfParas?.length ? makeMatcher(pdfParas) : null
 
-  const descParas: Paragraph[] = []
+  const descParas: (Paragraph | Table)[] = []
   if (patent.description) {
     for (const part of patent.description.split('\n\n').filter(Boolean)) {
       if (part.startsWith('HEADING: ')) {
         descParas.push(heading2(part.slice(9)))
+      } else if (part.startsWith('TABLE:\n')) {
+        const tbl = buildDescTable(part.slice(7))
+        if (tbl) descParas.push(tbl)
       } else {
         const text = part.replace(/\s+/g, ' ')
         const ref  = match ? match(text) : ''
@@ -149,7 +201,7 @@ export async function buildPatentDoc(patent: PatentData, pdfParas?: PdfParagraph
 
   const claimParas: Paragraph[] = []
   if (patent.claims?.length > 0) {
-    claimParas.push(heading2('Claims'))
+    claimParas.push(heading1('Claims'))
     for (const claim of patent.claims) {
       claimParas.push(...claimParagraphs(claim))
       claimParas.push(spacer())
@@ -168,10 +220,10 @@ export async function buildPatentDoc(patent: PatentData, pdfParas?: PdfParagraph
         labelValue('Assignee', patent.assignee),
         labelValue('Inventors', patent.inventors.join(', ')),
         spacer(),
-        heading2('Abstract'),
+        heading1('Abstract'),
         body(patent.abstract || '(No abstract available)'),
         spacer(),
-        heading2('Description'),
+        heading1('Description'),
         ...descParas,
         ...claimParas,
       ],
