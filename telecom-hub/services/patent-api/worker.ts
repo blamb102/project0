@@ -12,6 +12,7 @@ import {
   buildPatentDoc, buildClaimsDoc, buildClaimChartDoc,
   buildFileHistorySummaryDoc,
 } from './docgen'
+import { extractParagraphLines } from './pdflines'
 import { buildFamilyTreeSvg } from './familytree'
 
 const s3 = new S3Client({})
@@ -291,7 +292,8 @@ async function processOnePatent(
   ])
   patent.claims = claims
 
-  const pdfBuffer = needs('patentPdf') ? await fetchPatentPdf(patNum) : null
+  // Fetch PDF if needed for the PDF output or for line-number extraction in the text doc
+  const pdfBuffer = needs('patentPdf') || needs('patentText') ? await fetchPatentPdf(patNum) : null
 
   let familyTreeSvg: Buffer | null = null
   let familyTreeKey: string | undefined
@@ -308,8 +310,13 @@ async function processOnePatent(
 
   await setStatus(jobId, { status: 'running', step: `Generating documents${stepSuffix}` })
 
+  // Extract col:line references from the PDF to annotate the text document
+  const pdfParas = needs('patentText') && pdfBuffer
+    ? await extractParagraphLines(pdfBuffer).catch(() => undefined)
+    : undefined
+
   const [patentDocx, claimsDocx, chartDocx, summaryDocx, familyXlsx] = await Promise.all([
-    needs('patentText')         ? buildPatentDoc(patent)                          : null,
+    needs('patentText')         ? buildPatentDoc(patent, pdfParas)                : null,
     needs('claims')             ? buildClaimsDoc(patent, claims)                  : null,
     needs('claimChart')         ? buildClaimChartDoc(patent, claims)              : null,
     needs('fileHistorySummary') ? buildFileHistorySummaryDoc(patent, history, '', nick, assignments) : null,

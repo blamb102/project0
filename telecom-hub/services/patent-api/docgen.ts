@@ -4,6 +4,48 @@ import {
   PageOrientation, TableLayoutType,
 } from 'docx'
 import type { PatentData, FileHistoryDoc, FamilyMember, AssignmentRecord } from './sources'
+import type { PdfParagraph } from './pdflines'
+
+// ── PDF line-reference helpers ────────────────────────────────────────────────
+
+function normForMatch(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function wordOverlap(a: string, b: string): number {
+  const wa = new Set(a.split(' ').filter(w => w.length > 3))
+  const wb = new Set(b.split(' ').filter(w => w.length > 3))
+  if (!wa.size || !wb.size) return 0
+  let inter = 0
+  for (const w of wa) if (wb.has(w)) inter++
+  return inter / Math.max(wa.size, wb.size)
+}
+
+function lineRef(p: PdfParagraph): string {
+  if (p.startCol === p.endCol) return `[${p.startCol}:${p.startLine}-${p.endLine}] `
+  return `[${p.startCol}:${p.startLine}-${p.endCol}:${p.endLine}] `
+}
+
+// Greedy sequential matcher: for each XML paragraph, find the next best-matching
+// PDF paragraph (searching forward only, within a small lookahead window).
+function makeMatcher(paras: PdfParagraph[]) {
+  let ptr = 0
+  return (xmlText: string): string => {
+    const norm = normForMatch(xmlText)
+    if (!norm || !paras.length) return ''
+    const end  = Math.min(ptr + 10, paras.length)
+    let bestI  = -1, bestScore = 0
+    for (let i = ptr; i < end; i++) {
+      const score = wordOverlap(norm, paras[i].text)
+      if (score > bestScore) { bestScore = score; bestI = i }
+    }
+    if (bestI >= 0 && bestScore >= 0.25) {
+      ptr = bestI + 1
+      return lineRef(paras[bestI])
+    }
+    return ''
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -86,14 +128,18 @@ function makeRuns(text: string, size: number): TextRun[] {
 
 // ── Patent specification document ─────────────────────────────────────────────
 
-export async function buildPatentDoc(patent: PatentData): Promise<Buffer> {
+export async function buildPatentDoc(patent: PatentData, pdfParas?: PdfParagraph[]): Promise<Buffer> {
+  const match = pdfParas?.length ? makeMatcher(pdfParas) : null
+
   const descParas: Paragraph[] = []
   if (patent.description) {
     for (const part of patent.description.split('\n\n').filter(Boolean)) {
       if (part.startsWith('HEADING: ')) {
         descParas.push(heading2(part.slice(9)))
       } else {
-        descParas.push(body(part.replace(/\s+/g, ' ')))
+        const text = part.replace(/\s+/g, ' ')
+        const ref  = match ? match(text) : ''
+        descParas.push(body(ref + text))
       }
       descParas.push(spacer())
     }
